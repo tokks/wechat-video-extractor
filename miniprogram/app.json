@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/processing/processing",
+    "pages/result/result"
+  ],
+  "window": {
+    "navigationBarTitleText": "视频提取音频",
+    "navigationBarBackgroundColor": "#1a1a2e",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#0f0f1a"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

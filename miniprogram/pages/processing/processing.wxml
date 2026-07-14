@@ -1,0 +1,49 @@
+<!--pages/processing/processing.wxml - 处理中页-->
+<view class="container">
+  <!-- 正常处理中 -->
+  <view wx:if="{{!isError}}" class="processing-wrap">
+    <!-- 动画图标 -->
+    <view class="anim-icon">
+      <view class="spinner"></view>
+      <text class="emoji">🎵</text>
+    </view>
+
+    <text class="status-text">{{statusText}}</text>
+
+    <!-- 进度条 -->
+    <view class="progress-bar-wrap">
+      <view class="progress-bar">
+        <view class="progress-fill" style="width: {{progress}}%;"></view>
+      </view>
+      <text class="progress-num">{{progress}}%</text>
+    </view>
+
+    <text class="progress-message">{{message}}</text>
+
+    <!-- 步骤指示 -->
+    <view class="steps">
+      <view class="step {{progress >= 10 ? 'active' : ''}}">
+        <text class="step-dot"></text>
+        <text class="step-label">{{type === 'upload' ? '上传' : '下载'}}</text>
+      </view>
+      <view class="step-line {{progress >= 80 ? 'active' : ''}}"></view>
+      <view class="step {{progress >= 80 ? 'active' : ''}}">
+        <text class="step-dot"></text>
+        <text class="step-label">提取</text>
+      </view>
+      <view class="step-line {{progress >= 100 ? 'active' : ''}}"></view>
+      <view class="step {{progress >= 100 ? 'active' : ''}}">
+        <text class="step-dot"></text>
+        <text class="step-label">完成</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 错误状态 -->
+  <view wx:else class="error-wrap">
+    <text class="error-emoji">😕</text>
+    <text class="error-title">处理失败</text>
+    <text class="error-msg">{{message}}</text>
+    <button class="btn-primary" bindtap="onRetry" style="margin-top: 40rpx;">返回重试</button>
+  </view>
+</view>

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+uploads/
+tasks/
+*.wav
+*.mp4
+*.mp3
+.git
+.gitignore
+README.md

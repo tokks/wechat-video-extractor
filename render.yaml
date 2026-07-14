@@ -1,0 +1,13 @@
+# Render Blueprint - 自动部署配置
+# 文档: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: wechat-video-extractor
+    runtime: docker
+    dockerContext: backend
+    dockerfilePath: ./backend/Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data (don't commit)
+backend/uploads/
+backend/tasks/
+*.wav
+*.mp4
+*.mp3
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# WeChat dev tools
+miniprogram/miniprogram_npm/

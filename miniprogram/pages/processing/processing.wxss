@@ -1,0 +1,166 @@
+/* pages/processing/processing.wxss - 处理中页样式 */
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 40rpx;
+}
+
+.processing-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+/* 动画图标 */
+.anim-icon {
+  position: relative;
+  width: 160rpx;
+  height: 160rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 40rpx;
+}
+
+.spinner {
+  position: absolute;
+  width: 160rpx;
+  height: 160rpx;
+  border: 6rpx solid rgba(108,92,231,0.15);
+  border-top-color: #6c5ce7;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.emoji {
+  font-size: 56rpx;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.status-text {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 40rpx;
+}
+
+/* 进度条 */
+.progress-bar-wrap {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  margin-bottom: 20rpx;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 12rpx;
+  background: rgba(255,255,255,0.1);
+  border-radius: 6rpx;
+  overflow: hidden;
+  margin-right: 16rpx;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6c5ce7, #a29bfe);
+  border-radius: 6rpx;
+  transition: width 0.3s ease;
+}
+
+.progress-num {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #a29bfe;
+  min-width: 70rpx;
+  text-align: right;
+}
+
+.progress-message {
+  font-size: 26rpx;
+  color: #888;
+  margin-bottom: 60rpx;
+}
+
+/* 步骤指示 */
+.steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.step-dot {
+  width: 24rpx;
+  height: 24rpx;
+  border-radius: 50%;
+  background: #333;
+  border: 2rpx solid #444;
+}
+
+.step.active .step-dot {
+  background: #6c5ce7;
+  border-color: #a29bfe;
+  box-shadow: 0 0 12rpx rgba(108,92,231,0.5);
+}
+
+.step-label {
+  font-size: 22rpx;
+  color: #555;
+  margin-top: 8rpx;
+}
+
+.step.active .step-label {
+  color: #a29bfe;
+}
+
+.step-line {
+  width: 80rpx;
+  height: 2rpx;
+  background: #333;
+  margin: 0 16rpx;
+  margin-bottom: 30rpx;
+}
+
+.step-line.active {
+  background: #6c5ce7;
+}
+
+/* 错误状态 */
+.error-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.error-emoji {
+  font-size: 80rpx;
+  margin-bottom: 20rpx;
+}
+
+.error-title {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 16rpx;
+}
+
+.error-msg {
+  font-size: 28rpx;
+  color: #888;
+  text-align: center;
+  max-width: 500rpx;
+  line-height: 1.6;
+}

@@ -1,0 +1,146 @@
+/* pages/result/result.wxss - 结果页样式 */
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 60rpx 32rpx;
+  min-height: 100vh;
+}
+
+/* 成功图标 */
+.success-icon {
+  width: 120rpx;
+  height: 120rpx;
+  border-radius: 50%;
+  background: rgba(76,175,80,0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24rpx;
+}
+
+.emoji {
+  font-size: 60rpx;
+}
+
+.success-title {
+  font-size: 40rpx;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 40rpx;
+}
+
+/* 音频卡片 */
+.card {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border-radius: 24rpx;
+  padding: 32rpx;
+  margin-bottom: 40rpx;
+}
+
+.audio-info {
+  display: flex;
+  align-items: center;
+  margin-bottom: 24rpx;
+}
+
+.audio-icon {
+  font-size: 56rpx;
+  margin-right: 20rpx;
+}
+
+.audio-meta {
+  display: flex;
+  flex-direction: column;
+}
+
+.audio-name {
+  font-size: 30rpx;
+  color: #ddd;
+  font-weight: 600;
+}
+
+.audio-size {
+  font-size: 24rpx;
+  color: #666;
+  margin-top: 4rpx;
+}
+
+/* 播放按钮 */
+.play-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88rpx;
+  background: rgba(108,92,231,0.15);
+  border-radius: 16rpx;
+  border: 1rpx solid rgba(108,92,231,0.3);
+}
+
+.play-btn.playing {
+  background: rgba(108,92,231,0.25);
+}
+
+.play-icon {
+  font-size: 36rpx;
+  margin-right: 12rpx;
+  color: #a29bfe;
+}
+
+.play-text {
+  font-size: 30rpx;
+  color: #a29bfe;
+  font-weight: 600;
+}
+
+/* 下载进度 */
+.download-progress {
+  width: 100%;
+  margin-bottom: 24rpx;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8rpx;
+  background: rgba(255,255,255,0.1);
+  border-radius: 4rpx;
+  overflow: hidden;
+  margin-bottom: 8rpx;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6c5ce7, #a29bfe);
+  border-radius: 4rpx;
+  transition: width 0.3s;
+}
+
+.progress-text {
+  font-size: 24rpx;
+  color: #888;
+  text-align: center;
+}
+
+/* 操作按钮 */
+.actions {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+.actions .btn-primary,
+.actions .btn-secondary {
+  width: 100%;
+}
+
+/* 提示 */
+.tips {
+  margin-top: 40rpx;
+}
+
+.tip-text {
+  font-size: 24rpx;
+  color: #444;
+}
