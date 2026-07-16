@@ -13,6 +13,7 @@ import uuid
 import json
 import shutil
 import asyncio
+import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -174,9 +175,52 @@ async def _process_link(task_id: str, url: str, platform: str):
         task["message"] = f"处理失败: {str(e)}"
 
 
+def _get_fresh_cookies(url: str) -> str | None:
+    """访问平台首页获取 Cookie，保存为 Netscape 格式文件"""
+    import requests
+
+    platform = detect_platform(url)
+    homepage_map = {
+        "douyin": "https://www.douyin.com/",
+        "kuaishou": "https://www.kuaishou.com/",
+        "xiaohongshu": "https://www.xiaohongshu.com/",
+        "huoshan": "https://www.huoshan.com/",
+        "bilibili": "https://www.bilibili.com/",
+    }
+    homepage = homepage_map.get(platform)
+    if not homepage:
+        return None
+
+    cookie_file = str(Path(tempfile.gettempdir()) / f"cookies_{platform}.txt")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    try:
+        session = requests.Session()
+        session.headers.update(headers)
+        session.get(homepage, timeout=10, allow_redirects=True)
+
+        with open(cookie_file, "w") as f:
+            f.write("# Netscape HTTP Cookie File\n")
+            for cookie in session.cookies:
+                domain = cookie.domain if cookie.domain.startswith(".") else "." + cookie.domain
+                secure = "TRUE" if cookie.secure else "FALSE"
+                f.write(f"{domain}\tTRUE\t{cookie.path}\t{secure}\t{cookie.expires or 0}\t{cookie.name}\t{cookie.value}\n")
+
+        print(f"[cookies] Got {len(session.cookies)} cookies from {platform}")
+        return cookie_file
+    except Exception as e:
+        print(f"[cookies] Failed to get cookies: {e}")
+        return None
+
+
 def _download_video(url: str, output_path: str) -> str | None:
     """使用 yt-dlp 下载视频"""
     import yt_dlp
+
+    # 尝试获取平台 Cookie（抖音等平台需要）
+    cookie_file = _get_fresh_cookies(url)
 
     ydl_opts = {
         "outtmpl": output_path,
@@ -193,6 +237,9 @@ def _download_video(url: str, output_path: str) -> str | None:
         },
     }
 
+    if cookie_file:
+        ydl_opts["cookiefile"] = cookie_file
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
@@ -206,6 +253,13 @@ def _download_video(url: str, output_path: str) -> str | None:
         import traceback
         traceback.print_exc()
         return None
+    finally:
+        # 清理 cookie 文件
+        if cookie_file:
+            try:
+                os.unlink(cookie_file)
+            except OSError:
+                pass
 
 
 # ════════════════════════════════════════
