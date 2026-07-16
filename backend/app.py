@@ -283,8 +283,25 @@ def _get_fresh_cookies(url: str) -> str | None:
     return None
 
 
+def _find_json_key(data, key):
+    """递归在 JSON/dict/list 中查找指定 key 的第一个匹配值"""
+    if isinstance(data, dict):
+        if key in data:
+            return data[key]
+        for v in data.values():
+            result = _find_json_key(v, key)
+            if result is not None:
+                return result
+    elif isinstance(data, list):
+        for item in data:
+            result = _find_json_key(item, key)
+            if result is not None:
+                return result
+    return None
+
+
 def _download_douyin_direct(url: str, output_path: str) -> str | None:
-    """抖音直接下载 - 绕过 yt-dlp Cookie 限制，用 curl_cffi 模拟浏览器"""
+    """抖音直接下载 - 移动端分享页(window._ROUTER_DATA)解析，无需 Cookie"""
     try:
         from curl_cffi import requests as cffi_requests
     except ImportError:
@@ -293,129 +310,89 @@ def _download_douyin_direct(url: str, output_path: str) -> str | None:
 
     try:
         session = cffi_requests.Session(impersonate="chrome120")
+        # 移动端 UA + Referer（抖音反爬校验，缺少会 403）
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
+            "Referer": "https://www.douyin.com/?is_from_mobile_home=1&recommend=1",
+        })
 
-        # Step 1: 先访问 douyin.com 获取 ttwid 等 Cookie
-        try:
-            session.get("https://www.douyin.com/", timeout=15)
-            print(f"[douyin-direct] Got {len(list(session.cookies.jar))} cookies from homepage")
-        except Exception as e:
-            print(f"[douyin-direct] Homepage visit failed: {e}")
-
-        # Step 2: 跟随分享链接，获取视频 ID
+        # Step 1: 从分享短链跟随重定向，获取视频 ID
         print(f"[douyin-direct] Following share link: {url}")
         resp = session.get(url, allow_redirects=True, timeout=15)
         final_url = str(resp.url)
 
         video_id = None
-        for pattern in [r"/video/(\d+)", r"/note/(\d+)", r"awemeId[\"\s:]+[\"\']?(\d{15,})"]:
-            match = re.search(pattern, final_url) or re.search(pattern, resp.text)
+        match = re.search(r"/video/(\d+)", final_url) or re.search(r"/video/(\d+)", resp.text)
+        if match:
+            video_id = match.group(1)
+        else:
+            match = re.search(r"awemeId[\"\s:]+[\"\']?(\d{15,})", resp.text)
             if match:
                 video_id = match.group(1)
-                break
 
         if not video_id:
             print(f"[douyin-direct] Cannot find video ID from {final_url}")
             return None
-
         print(f"[douyin-direct] Video ID: {video_id}")
 
-        # Step 3: 尝试抖音 Web API
-        api_url = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
-        params = {
-            "aweme_id": video_id,
-            "aid": "6383",
-            "cookie_enabled": "true",
-            "device_platform": "webapp",
-            "channel": "channel_pc_web",
-            "version_code": "170400",
-        }
-        headers = {
-            "Referer": f"https://www.douyin.com/video/{video_id}",
-        }
+        # Step 2: 访问移动端分享页，提取 window._ROUTER_DATA
+        share_url = f"https://www.iesdouyin.com/share/video/{video_id}/"
+        print(f"[douyin-direct] Fetching share page: {share_url}")
+        resp = session.get(share_url, timeout=15)
+        print(f"[douyin-direct] Share page status={resp.status_code}")
+
+        if resp.status_code != 200:
+            print(f"[douyin-direct] Share page failed")
+            return None
+
+        # 提取 window._ROUTER_DATA = {...}; （非贪婪匹配到 </script>）
+        match = re.search(r"window\._ROUTER_DATA\s*=\s*(\{.*?\});?\s*</script>", resp.text, re.DOTALL)
+        if not match:
+            print(f"[douyin-direct] No _ROUTER_DATA found in share page")
+            return None
+
         try:
-            resp = session.get(api_url, params=params, headers=headers, timeout=15)
-            print(f"[douyin-direct] Web API status={resp.status_code}")
+            router_data = json.loads(match.group(1))
         except Exception as e:
-            print(f"[douyin-direct] Web API failed: {e}")
-            resp = None
+            print(f"[douyin-direct] JSON parse error: {e}")
+            return None
 
-        if resp and resp.status_code == 200:
-            try:
-                data = resp.json()
-                detail = data.get("aweme_detail") or data.get("detail", {})
-                video = detail.get("video", {})
-                play_addr = video.get("play_addr", {})
-                url_list = play_addr.get("url_list", [])
-                if url_list:
-                    video_url = url_list[0].replace("playwm", "play")
-                    print(f"[douyin-direct] Found video URL from Web API")
-                    video_resp = session.get(video_url, timeout=60)
-                    if video_resp.status_code == 200 and len(video_resp.content) > 1000:
-                        with open(output_path, "wb") as f:
-                            f.write(video_resp.content)
-                        print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
-                        return output_path
-                    else:
-                        print(f"[douyin-direct] Download failed: status={video_resp.status_code}, size={len(video_resp.content)}")
-                else:
-                    print(f"[douyin-direct] No url_list in API response")
-            except Exception as e:
-                print(f"[douyin-direct] API parse error: {e}")
+        # 递归查找 item_list（路径: loaderData['video_(id)/page']['videoInfoRes']['item_list']）
+        item_list = _find_json_key(router_data, "item_list")
+        if not item_list:
+            print(f"[douyin-direct] No item_list in _ROUTER_DATA")
+            return None
 
-        # Step 4: 从视频页面 RENDER_DATA 提取
-        print("[douyin-direct] Trying RENDER_DATA extraction...")
-        page_url = f"https://www.douyin.com/video/{video_id}"
-        resp = session.get(page_url, timeout=15, headers={"Referer": "https://www.douyin.com/"})
+        item = item_list[0]
+        video = item.get("video", {})
+        # play_addr 优先，download_addr 兜底
+        play_addr = video.get("play_addr") or video.get("download_addr") or {}
+        video_uri = play_addr.get("uri")
 
-        # RENDER_DATA 是 URL 编码的 JSON
-        render_match = re.search(r'<script id="RENDER_DATA"[^>]*>(.*?)</script>', resp.text, re.DOTALL)
-        if render_match:
-            render_data = urllib.parse.unquote(render_match.group(1))
-            print(f"[douyin-direct] RENDER_DATA length={len(render_data)}")
+        if not video_uri:
+            print(f"[douyin-direct] No video uri in play_addr")
+            return None
+        print(f"[douyin-direct] Video URI: {video_uri}")
 
-            # 搜索视频 URL
-            video_patterns = [
-                r'"playAddr"[^}]*"src":"([^"]+)"',
-                r'"play_addr"[^}]*"url_list":\["([^"]+)"',
-                r'"playApi":"([^"]+)"',
-                r'"download_addr"[^}]*"url_list":\["([^"]+)"',
-                r'(https?://[^"]+douyinvod[^"]+)',
-                r'(https?://v[dl]-[^"]+\.mp4[^"]*)',
-            ]
-            for pattern in video_patterns:
-                match = re.search(pattern, render_data)
-                if match:
-                    video_url = match.group(1).replace("\\u002F", "/").replace("\\/", "/")
-                    print(f"[douyin-direct] Found video URL in RENDER_DATA")
-                    video_resp = session.get(video_url, timeout=60)
-                    if video_resp.status_code == 200 and len(video_resp.content) > 1000:
-                        with open(output_path, "wb") as f:
-                            f.write(video_resp.content)
-                        print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
-                        return output_path
-                    else:
-                        print(f"[douyin-direct] Download failed: status={video_resp.status_code}")
+        # Step 3: 请求播放接口，跟随重定向拿到真实 CDN 地址
+        play_url = f"https://www.douyin.com/aweme/v1/play/?video_id={video_uri}"
+        print(f"[douyin-direct] Requesting play URL...")
+        resp = session.get(play_url, timeout=30, allow_redirects=True)
+        video_url = str(resp.url)
+        print(f"[douyin-direct] Final video URL: {video_url[:120]}")
 
-        # Step 5: 从原始 HTML 搜索视频 URL（兜底）
-        print("[douyin-direct] Trying raw HTML extraction...")
-        for pattern in [
-            r'(https?://[^"]+douyinvod[^"]+)',
-            r'"playApi":"([^"]+)"',
-            r'(https?://v[dl]-[^"]+\.mp4[^"]*)',
-        ]:
-            match = re.search(pattern, resp.text)
-            if match:
-                video_url = match.group(1).replace("\\u002F", "/").replace("\\/", "/")
-                print(f"[douyin-direct] Found video URL in HTML")
-                video_resp = session.get(video_url, timeout=60)
-                if video_resp.status_code == 200 and len(video_resp.content) > 1000:
-                    with open(output_path, "wb") as f:
-                        f.write(video_resp.content)
-                    print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
-                    return output_path
-
-        print("[douyin-direct] All methods failed")
-        return None
+        # Step 4: 下载视频（带 Referer 避免 CDN 403）
+        print(f"[douyin-direct] Downloading video...")
+        video_resp = session.get(video_url, timeout=60)
+        if video_resp.status_code == 200 and len(video_resp.content) > 1000:
+            with open(output_path, "wb") as f:
+                f.write(video_resp.content)
+            print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
+            return output_path
+        else:
+            print(f"[douyin-direct] Download failed: status={video_resp.status_code}, size={len(video_resp.content)}")
+            return None
 
     except Exception as e:
         print(f"[douyin-direct] Error: {e}")
@@ -424,17 +401,64 @@ def _download_douyin_direct(url: str, output_path: str) -> str | None:
         return None
 
 
+def _download_douyin_thirdparty(url: str, output_path: str) -> str | None:
+    """兜底：第三方解析 API 获取无水印视频地址（无需 Cookie）"""
+    import requests as req_lib
+
+    api = f"https://api.yujn.cn/api/dy_jx.php?msg={urllib.parse.quote(url, safe='')}"
+    try:
+        print(f"[thirdparty] Trying API: {api[:70]}...")
+        resp = req_lib.get(api, timeout=20, headers={
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                          "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+        })
+        if resp.status_code != 200:
+            print(f"[thirdparty] API status={resp.status_code}")
+            return None
+        data = resp.json()
+        # 兼容多种返回格式
+        video_url = None
+        if isinstance(data, dict):
+            video_url = (
+                data.get("video_url") or data.get("url") or
+                data.get("play_url") or data.get("downurl") or
+                (data.get("data", {}).get("url") if isinstance(data.get("data"), dict) else None) or
+                (data.get("data") if isinstance(data.get("data"), str) else None)
+            )
+        if not video_url:
+            print(f"[thirdparty] No video URL in response: {str(data)[:200]}")
+            return None
+        print(f"[thirdparty] Got video URL, downloading...")
+        video_resp = req_lib.get(video_url, timeout=60, stream=True)
+        if video_resp.status_code == 200:
+            with open(output_path, "wb") as f:
+                for chunk in video_resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            if os.path.getsize(output_path) > 1000:
+                print(f"[thirdparty] Downloaded {os.path.getsize(output_path)} bytes")
+                return output_path
+        print(f"[thirdparty] Download failed: status={video_resp.status_code}")
+    except Exception as e:
+        print(f"[thirdparty] Error: {e}")
+    return None
+
+
 def _download_video(url: str, output_path: str) -> str | None:
     """下载视频：抖音优先直接下载，其他用 yt-dlp"""
     platform = detect_platform(url)
 
-    # 抖音优先尝试直接下载（绕过 yt-dlp Cookie 限制）
+    # 抖音优先尝试直接下载（无需 Cookie）；失败再用第三方 API 兜底
     if platform == "douyin":
-        print("[download] Trying direct Douyin download (bypass yt-dlp cookies)...")
+        print("[download] Trying direct Douyin download (no cookie needed)...")
         result = _download_douyin_direct(url, output_path)
         if result:
             return result
-        print("[download] Direct download failed, falling back to yt-dlp...")
+        print("[download] Direct download failed, trying third-party API...")
+        result = _download_douyin_thirdparty(url, output_path)
+        if result:
+            return result
+        print("[download] All Douyin methods failed")
+        return None
 
     # yt-dlp 下载
     import yt_dlp
