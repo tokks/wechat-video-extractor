@@ -176,10 +176,29 @@ async def _process_link(task_id: str, url: str, platform: str):
 
 
 def _get_fresh_cookies(url: str) -> str | None:
-    """访问平台首页获取 Cookie，保存为 Netscape 格式文件"""
+    """获取平台 Cookie，保存为 Netscape 格式文件"""
     import requests
 
     platform = detect_platform(url)
+    cookie_file = str(Path(tempfile.gettempdir()) / f"cookies_{platform}.txt")
+
+    # 抖音需要 JS 生成的 Cookie（ttwid 等），用 Playwright 无头浏览器获取
+    if platform == "douyin":
+        pw_result = _get_cookies_playwright("https://www.douyin.com/", cookie_file)
+        if pw_result:
+            return pw_result
+        # Playwright 不可用或失败，尝试 requests 兜底
+        print("[cookies] Playwright failed, trying requests fallback")
+
+    # 其他平台：requests 访问首页获取 Cookie
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    })
+
     homepage_map = {
         "douyin": "https://www.douyin.com/",
         "kuaishou": "https://www.kuaishou.com/",
@@ -191,27 +210,72 @@ def _get_fresh_cookies(url: str) -> str | None:
     if not homepage:
         return None
 
-    cookie_file = str(Path(tempfile.gettempdir()) / f"cookies_{platform}.txt")
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
     try:
-        session = requests.Session()
-        session.headers.update(headers)
-        session.get(homepage, timeout=10, allow_redirects=True)
+        session.get(homepage, timeout=10)
+    except Exception:
+        pass
+
+    cookie_count = len(session.cookies)
+    if cookie_count == 0:
+        print(f"[cookies] No cookies obtained from {platform}")
+        return None
+
+    with open(cookie_file, "w") as f:
+        f.write("# Netscape HTTP Cookie File\n")
+        for cookie in session.cookies:
+            domain = cookie.domain if cookie.domain.startswith(".") else "." + cookie.domain
+            secure = "TRUE" if cookie.secure else "FALSE"
+            f.write(f"{domain}\tTRUE\t{cookie.path}\t{secure}\t{cookie.expires or 0}\t{cookie.name}\t{cookie.value}\n")
+
+    print(f"[cookies] Got {cookie_count} cookies from {platform} (requests)")
+    return cookie_file
+
+
+def _get_cookies_playwright(url: str, cookie_file: str) -> str | None:
+    """用 Playwright 无头浏览器访问页面，获取 JS 生成的 Cookie"""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("[cookies] Playwright not installed, skipping")
+        return None
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                locale="zh-CN",
+            )
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=20000)
+            # 等待 JS 设置 cookie
+            page.wait_for_timeout(3000)
+
+            cookies = context.cookies()
+            browser.close()
+
+        if not cookies:
+            print("[cookies] Playwright: no cookies obtained")
+            return None
 
         with open(cookie_file, "w") as f:
             f.write("# Netscape HTTP Cookie File\n")
-            for cookie in session.cookies:
-                domain = cookie.domain if cookie.domain.startswith(".") else "." + cookie.domain
-                secure = "TRUE" if cookie.secure else "FALSE"
-                f.write(f"{domain}\tTRUE\t{cookie.path}\t{secure}\t{cookie.expires or 0}\t{cookie.name}\t{cookie.value}\n")
+            for cookie in cookies:
+                domain = cookie.get("domain", "")
+                if not domain.startswith("."):
+                    domain = "." + domain
+                secure = "TRUE" if cookie.get("secure") else "FALSE"
+                path = cookie.get("path", "/")
+                expires = int(cookie.get("expires", 0))
+                name = cookie.get("name", "")
+                value = cookie.get("value", "")
+                f.write(f"{domain}\tTRUE\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
 
-        print(f"[cookies] Got {len(session.cookies)} cookies from {platform}")
+        print(f"[cookies] Playwright: got {len(cookies)} cookies")
         return cookie_file
     except Exception as e:
-        print(f"[cookies] Failed to get cookies: {e}")
+        print(f"[cookies] Playwright error: {e}")
         return None
 
 

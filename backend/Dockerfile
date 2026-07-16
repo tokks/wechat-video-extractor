@@ -21,7 +21,7 @@ COPY app.py .
 RUN mkdir -p uploads tasks
 
 # 暴露端口
-EXPOSE 8000
+EXPOSE 80
 
-# Render 会设置 PORT 环境变量
-CMD uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}
+# 启动服务，监听 80 端口
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "80"]
