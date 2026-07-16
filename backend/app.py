@@ -131,7 +131,7 @@ async def _process_link(task_id: str, url: str, platform: str):
 
         if not downloaded:
             task["status"] = "error"
-            task["message"] = "视频下载失败，可能是链接无效或需要登录"
+            task["message"] = "视频下载失败，可能是链接无效、需要登录或平台反爬，请换链接重试"
             return
 
         task["video_path"] = str(downloaded)
@@ -191,6 +191,8 @@ def _download_video(url: str, output_path: str) -> str | None:
         return None
     except Exception as e:
         print(f"[download error] {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 

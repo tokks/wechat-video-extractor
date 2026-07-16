@@ -5,6 +5,9 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
+# 安装最新 yt-dlp
+RUN pip install --no-cache-dir -U yt-dlp
+
 WORKDIR /app
 
 # 先装依赖（利用 Docker 缓存层）
