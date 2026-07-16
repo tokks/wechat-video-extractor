@@ -175,28 +175,104 @@ async def _process_link(task_id: str, url: str, platform: str):
         task["message"] = f"处理失败: {str(e)}"
 
 
-def _get_fresh_cookies(url: str) -> str | None:
-    """获取平台 Cookie，保存为 Netscape 格式文件"""
-    import requests
+def _save_cookies_netscape(cookies, cookie_file: str, source: str):
+    """保存 Cookie 为 Netscape 格式"""
+    if not cookies:
+        print(f"[cookies] No cookies from {source}")
+        return False
+    with open(cookie_file, "w") as f:
+        f.write("# Netscape HTTP Cookie File\n")
+        for cookie in cookies:
+            domain = cookie.domain if hasattr(cookie, "domain") else cookie.get("domain", "")
+            if not domain:
+                continue
+            if not domain.startswith("."):
+                domain = "." + domain
+            name = cookie.name if hasattr(cookie, "name") else cookie.get("name", "")
+            value = cookie.value if hasattr(cookie, "value") else cookie.get("value", "")
+            path = cookie.path if hasattr(cookie, "path") else cookie.get("path", "/")
+            secure = cookie.secure if hasattr(cookie, "secure") else cookie.get("secure", False)
+            expires = cookie.expires if hasattr(cookie, "expires") else cookie.get("expires", 0)
+            if expires is None:
+                expires = 0
+            secure_str = "TRUE" if secure else "FALSE"
+            f.write(f"{domain}\tTRUE\t{path}\t{secure_str}\t{expires}\t{name}\t{value}\n")
+    print(f"[cookies] Got {len(cookies)} cookies from {source}")
+    return True
 
+
+def _get_fresh_cookies(url: str) -> str | None:
+    """获取平台 Cookie，优先用 curl_cffi 模拟 Chrome TLS 指纹"""
     platform = detect_platform(url)
     cookie_file = str(Path(tempfile.gettempdir()) / f"cookies_{platform}.txt")
 
-    # 抖音需要 JS 生成的 Cookie（ttwid 等），用 Playwright 无头浏览器获取
-    if platform == "douyin":
-        pw_result = _get_cookies_playwright("https://www.douyin.com/", cookie_file)
-        if pw_result:
-            return pw_result
-        # Playwright 不可用或失败，尝试 requests 兜底
-        print("[cookies] Playwright failed, trying requests fallback")
+    # ── 方案1: curl_cffi 模拟 Chrome TLS 指纹获取 Cookie ──
+    try:
+        from curl_cffi import requests as cffi_requests
 
-    # 其他平台：requests 访问首页获取 Cookie
-    session = requests.Session()
+        session = cffi_requests.Session(impersonate="chrome120")
+
+        if platform == "douyin":
+            # 抖音需要 ttwid，先调 API
+            try:
+                resp = session.post(
+                    "https://ttwid.bytedance.com/ttwid/union_register/",
+                    json={
+                        "region": "cn",
+                        "aid": 1768,
+                        "needFid": False,
+                        "service": "https://www.douyin.com",
+                        "migrate_info": {"ticket": "", "source": "node"},
+                        "cbUrlProtocol": "https",
+                        "union": True,
+                    },
+                    timeout=15,
+                )
+                print(f"[cookies] ttwid API status={resp.status_code}, cookies={len(session.cookies)}")
+            except Exception as e:
+                print(f"[cookies] ttwid API failed: {e}")
+
+            # 再访问首页补充 Cookie
+            try:
+                session.get("https://www.douyin.com/", timeout=15)
+            except Exception:
+                pass
+
+            # 跟随分享链接也可能带 Cookie
+            try:
+                session.get(url, timeout=15, allow_redirects=True)
+            except Exception:
+                pass
+        else:
+            homepage_map = {
+                "kuaishou": "https://www.kuaishou.com/",
+                "xiaohongshu": "https://www.xiaohongshu.com/",
+                "huoshan": "https://www.huoshan.com/",
+                "bilibili": "https://www.bilibili.com/",
+            }
+            homepage = homepage_map.get(platform)
+            if homepage:
+                try:
+                    session.get(homepage, timeout=15)
+                except Exception:
+                    pass
+
+        if _save_cookies_netscape(list(session.cookies), cookie_file, f"{platform} (curl_cffi)"):
+            return cookie_file
+
+    except ImportError:
+        print("[cookies] curl_cffi not installed")
+    except Exception as e:
+        print(f"[cookies] curl_cffi error: {e}")
+
+    # ── 方案2: requests 兜底 ──
+    import requests as req_lib
+
+    session = req_lib.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
     })
 
     homepage_map = {
@@ -215,75 +291,129 @@ def _get_fresh_cookies(url: str) -> str | None:
     except Exception:
         pass
 
-    cookie_count = len(session.cookies)
-    if cookie_count == 0:
-        print(f"[cookies] No cookies obtained from {platform}")
-        return None
-
-    with open(cookie_file, "w") as f:
-        f.write("# Netscape HTTP Cookie File\n")
-        for cookie in session.cookies:
-            domain = cookie.domain if cookie.domain.startswith(".") else "." + cookie.domain
-            secure = "TRUE" if cookie.secure else "FALSE"
-            f.write(f"{domain}\tTRUE\t{cookie.path}\t{secure}\t{cookie.expires or 0}\t{cookie.name}\t{cookie.value}\n")
-
-    print(f"[cookies] Got {cookie_count} cookies from {platform} (requests)")
-    return cookie_file
+    if _save_cookies_netscape(list(session.cookies), cookie_file, f"{platform} (requests)"):
+        return cookie_file
+    return None
 
 
-def _get_cookies_playwright(url: str, cookie_file: str) -> str | None:
-    """用 Playwright 无头浏览器访问页面，获取 JS 生成的 Cookie"""
+def _download_douyin_direct(url: str, output_path: str) -> str | None:
+    """抖音直接下载 - 绕过 yt-dlp Cookie 限制，用 curl_cffi 模拟浏览器"""
     try:
-        from playwright.sync_api import sync_playwright
+        from curl_cffi import requests as cffi_requests
     except ImportError:
-        print("[cookies] Playwright not installed, skipping")
+        print("[douyin-direct] curl_cffi not installed")
         return None
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                locale="zh-CN",
-            )
-            page = context.new_page()
-            page.goto(url, wait_until="networkidle", timeout=20000)
-            # 等待 JS 设置 cookie
-            page.wait_for_timeout(3000)
+        session = cffi_requests.Session(impersonate="chrome120")
 
-            cookies = context.cookies()
-            browser.close()
+        # Step 1: 跟随分享链接，获取视频 ID
+        print(f"[douyin-direct] Following share link: {url}")
+        resp = session.get(url, allow_redirects=True, timeout=15)
+        final_url = str(resp.url)
 
-        if not cookies:
-            print("[cookies] Playwright: no cookies obtained")
+        video_id = None
+        match = re.search(r'/video/(\d+)', final_url)
+        if match:
+            video_id = match.group(1)
+        else:
+            match = re.search(r'/note/(\d+)', final_url)
+            if match:
+                video_id = match.group(1)
+            else:
+                match = re.search(r'"awemeId["\s:]+["\']?(\d{15,})', resp.text)
+                if match:
+                    video_id = match.group(1)
+
+        if not video_id:
+            print(f"[douyin-direct] Cannot find video ID from {final_url}")
             return None
 
-        with open(cookie_file, "w") as f:
-            f.write("# Netscape HTTP Cookie File\n")
-            for cookie in cookies:
-                domain = cookie.get("domain", "")
-                if not domain.startswith("."):
-                    domain = "." + domain
-                secure = "TRUE" if cookie.get("secure") else "FALSE"
-                path = cookie.get("path", "/")
-                expires = int(cookie.get("expires", 0))
-                name = cookie.get("name", "")
-                value = cookie.get("value", "")
-                f.write(f"{domain}\tTRUE\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+        print(f"[douyin-direct] Video ID: {video_id}")
 
-        print(f"[cookies] Playwright: got {len(cookies)} cookies")
-        return cookie_file
+        # Step 2: 尝试 iesdouyin 移动端 API（不需要 Cookie）
+        api_url = f"https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids={video_id}"
+        resp = session.get(api_url, timeout=15)
+
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                items = data.get("item_list", [])
+                if items:
+                    item = items[0]
+                    video = item.get("video", {})
+                    play_addr = video.get("play_addr", {})
+                    url_list = play_addr.get("url_list", [])
+                    if url_list:
+                        video_url = url_list[0]
+                        # 替换为无水印 URL
+                        video_url = video_url.replace("playwm", "play")
+
+                        print(f"[douyin-direct] Found video URL, downloading...")
+                        video_resp = session.get(video_url, timeout=60)
+
+                        if video_resp.status_code == 200 and len(video_resp.content) > 1000:
+                            with open(output_path, "wb") as f:
+                                f.write(video_resp.content)
+                            print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
+                            return output_path
+                        else:
+                            print(f"[douyin-direct] Video download failed: status={video_resp.status_code}, size={len(video_resp.content)}")
+            except Exception as e:
+                print(f"[douyin-direct] API parse error: {e}")
+        else:
+            print(f"[douyin-direct] iesdouyin API status={resp.status_code}")
+
+        # Step 3: 尝试从视频页面 HTML 提取视频 URL
+        print("[douyin-direct] Trying page HTML extraction...")
+        page_url = f"https://www.douyin.com/video/{video_id}"
+        resp = session.get(page_url, timeout=15)
+
+        # 从 HTML 中搜索视频 URL
+        video_patterns = [
+            r'"playAddr"[^}]*"src":"([^"]+)"',
+            r'"play_addr"[^}]*"url_list":\["([^"]+)"',
+            r'playApi["\s:]+//[^"]+',
+            r'(https?://[^"]+douyinvod[^"]+)',
+        ]
+
+        for pattern in video_patterns:
+            match = re.search(pattern, resp.text)
+            if match:
+                video_url = match.group(1).replace("\\u002F", "/").replace("\\/", "/")
+                print(f"[douyin-direct] Found video URL in HTML")
+                video_resp = session.get(video_url, timeout=60)
+                if video_resp.status_code == 200 and len(video_resp.content) > 1000:
+                    with open(output_path, "wb") as f:
+                        f.write(video_resp.content)
+                    print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
+                    return output_path
+
+        print("[douyin-direct] All methods failed")
+        return None
+
     except Exception as e:
-        print(f"[cookies] Playwright error: {e}")
+        print(f"[douyin-direct] Error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
 def _download_video(url: str, output_path: str) -> str | None:
-    """使用 yt-dlp 下载视频"""
+    """下载视频：抖音优先直接下载，其他用 yt-dlp"""
+    platform = detect_platform(url)
+
+    # 抖音优先尝试直接下载（绕过 yt-dlp Cookie 限制）
+    if platform == "douyin":
+        print("[download] Trying direct Douyin download (bypass yt-dlp cookies)...")
+        result = _download_douyin_direct(url, output_path)
+        if result:
+            return result
+        print("[download] Direct download failed, falling back to yt-dlp...")
+
+    # yt-dlp 下载
     import yt_dlp
 
-    # 尝试获取平台 Cookie（抖音等平台需要）
     cookie_file = _get_fresh_cookies(url)
 
     ydl_opts = {
@@ -293,7 +423,6 @@ def _download_video(url: str, output_path: str) -> str | None:
         "no_warnings": True,
         "socket_timeout": 30,
         "retries": 3,
-        # 模拟浏览器请求
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -308,7 +437,6 @@ def _download_video(url: str, output_path: str) -> str | None:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # yt-dlp 可能加后缀，找实际文件
         for p in Path(output_path).parent.glob("video*"):
             return str(p)
         return None
@@ -318,7 +446,6 @@ def _download_video(url: str, output_path: str) -> str | None:
         traceback.print_exc()
         return None
     finally:
-        # 清理 cookie 文件
         if cookie_file:
             try:
                 os.unlink(cookie_file)

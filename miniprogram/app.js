@@ -3,7 +3,8 @@ App({
   globalData: {
     // ★★★ 部署后改为你的服务器地址（必须是 HTTPS） ★★★
     // baseUrl: 'http://localhost:8000',
-    baseUrl: 'https://wechat-video-extractor.onrender.com',
+    // baseUrl: 'https://wechat-video-extractor.onrender.com',
+    baseUrl: 'https://video-extractor-283096-9-1454775300.sh.run.tcloudbase.com',
     // 分片大小：2MB（微信单次上传限制 10MB，留余量）
     chunkSize: 2 * 1024 * 1024,
   },
