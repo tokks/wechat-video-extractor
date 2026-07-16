@@ -8,6 +8,7 @@
 """
 
 import os
+import re
 import uuid
 import json
 import shutil
@@ -97,12 +98,23 @@ def detect_platform(url: str) -> str:
     return "unknown"
 
 
+def extract_url(text: str) -> str:
+    """从分享文案中提取真正的视频 URL"""
+    # 匹配 http/https 开头的 URL
+    match = re.search(r'https?://[^\s<>"\'，。]+', text)
+    if match:
+        return match.group(0).rstrip('/')
+    return text.strip()
+
+
 @app.post("/api/parse-link")
 async def parse_link(url: str = Form(...)):
     """
     解析短视频链接并提取音频
     返回 task_id，后台异步处理
     """
+    # 从分享文案中提取真正的 URL
+    url = extract_url(url)
     platform = detect_platform(url)
     if platform == "unknown":
         raise HTTPException(400, "不支持的视频链接，目前支持抖音、快手、火山、B站、小红书")
