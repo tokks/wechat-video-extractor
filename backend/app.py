@@ -14,6 +14,7 @@ import json
 import shutil
 import asyncio
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -175,34 +176,50 @@ async def _process_link(task_id: str, url: str, platform: str):
         task["message"] = f"处理失败: {str(e)}"
 
 
-def _save_cookies_netscape(cookies, cookie_file: str, source: str):
-    """保存 Cookie 为 Netscape 格式"""
+def _save_cookies_netscape(cookie_jar, cookie_file: str, source: str):
+    """保存 Cookie 为 Netscape 格式，兼容 curl_cffi 和 requests"""
+    # curl_cffi: session.cookies.jar → http.cookiejar.Cookie 对象列表
+    # requests: session.cookies → RequestsCookieJar（继承 CookieJar），迭代得到 Cookie 对象
+    if hasattr(cookie_jar, "jar"):
+        cookies = list(cookie_jar.jar)
+    else:
+        cookies = list(cookie_jar)
+
     if not cookies:
         print(f"[cookies] No cookies from {source}")
         return False
+
+    count = 0
     with open(cookie_file, "w") as f:
         f.write("# Netscape HTTP Cookie File\n")
         for cookie in cookies:
-            domain = cookie.domain if hasattr(cookie, "domain") else cookie.get("domain", "")
+            # 跳过字符串（curl_cffi 直接迭代 cookies 会返回 cookie 名字符串）
+            if isinstance(cookie, str):
+                continue
+            # http.cookiejar.Cookie 对象
+            domain = getattr(cookie, "domain", "") or ""
             if not domain:
                 continue
             if not domain.startswith("."):
                 domain = "." + domain
-            name = cookie.name if hasattr(cookie, "name") else cookie.get("name", "")
-            value = cookie.value if hasattr(cookie, "value") else cookie.get("value", "")
-            path = cookie.path if hasattr(cookie, "path") else cookie.get("path", "/")
-            secure = cookie.secure if hasattr(cookie, "secure") else cookie.get("secure", False)
-            expires = cookie.expires if hasattr(cookie, "expires") else cookie.get("expires", 0)
-            if expires is None:
-                expires = 0
+            name = getattr(cookie, "name", "") or ""
+            value = getattr(cookie, "value", "") or ""
+            path = getattr(cookie, "path", "/") or "/"
+            secure = getattr(cookie, "secure", False)
+            expires = getattr(cookie, "expires", 0) or 0
             secure_str = "TRUE" if secure else "FALSE"
             f.write(f"{domain}\tTRUE\t{path}\t{secure_str}\t{expires}\t{name}\t{value}\n")
-    print(f"[cookies] Got {len(cookies)} cookies from {source}")
+            count += 1
+
+    if count == 0:
+        print(f"[cookies] No valid cookies from {source}")
+        return False
+    print(f"[cookies] Got {count} cookies from {source}")
     return True
 
 
 def _get_fresh_cookies(url: str) -> str | None:
-    """获取平台 Cookie，优先用 curl_cffi 模拟 Chrome TLS 指纹"""
+    """获取平台 Cookie，用 curl_cffi 模拟 Chrome TLS 指纹"""
     platform = detect_platform(url)
     cookie_file = str(Path(tempfile.gettempdir()) / f"cookies_{platform}.txt")
 
@@ -212,52 +229,33 @@ def _get_fresh_cookies(url: str) -> str | None:
 
         session = cffi_requests.Session(impersonate="chrome120")
 
+        homepage_map = {
+            "douyin": "https://www.douyin.com/",
+            "kuaishou": "https://www.kuaishou.com/",
+            "xiaohongshu": "https://www.xiaohongshu.com/",
+            "huoshan": "https://www.huoshan.com/",
+            "bilibili": "https://www.bilibili.com/",
+        }
+        homepage = homepage_map.get(platform)
+        if not homepage:
+            return None
+
+        # 访问首页，让 JS 设置 Cookie（ttwid 等会在 Set-Cookie 响应头返回）
+        try:
+            resp = session.get(homepage, timeout=15)
+            print(f"[cookies] {platform} homepage status={resp.status_code}")
+        except Exception as e:
+            print(f"[cookies] {platform} homepage failed: {e}")
+
+        # 抖音额外访问分享链接，获取更多 Cookie
         if platform == "douyin":
-            # 抖音需要 ttwid，先调 API
-            try:
-                resp = session.post(
-                    "https://ttwid.bytedance.com/ttwid/union_register/",
-                    json={
-                        "region": "cn",
-                        "aid": 1768,
-                        "needFid": False,
-                        "service": "https://www.douyin.com",
-                        "migrate_info": {"ticket": "", "source": "node"},
-                        "cbUrlProtocol": "https",
-                        "union": True,
-                    },
-                    timeout=15,
-                )
-                print(f"[cookies] ttwid API status={resp.status_code}, cookies={len(session.cookies)}")
-            except Exception as e:
-                print(f"[cookies] ttwid API failed: {e}")
-
-            # 再访问首页补充 Cookie
-            try:
-                session.get("https://www.douyin.com/", timeout=15)
-            except Exception:
-                pass
-
-            # 跟随分享链接也可能带 Cookie
             try:
                 session.get(url, timeout=15, allow_redirects=True)
             except Exception:
                 pass
-        else:
-            homepage_map = {
-                "kuaishou": "https://www.kuaishou.com/",
-                "xiaohongshu": "https://www.xiaohongshu.com/",
-                "huoshan": "https://www.huoshan.com/",
-                "bilibili": "https://www.bilibili.com/",
-            }
-            homepage = homepage_map.get(platform)
-            if homepage:
-                try:
-                    session.get(homepage, timeout=15)
-                except Exception:
-                    pass
 
-        if _save_cookies_netscape(list(session.cookies), cookie_file, f"{platform} (curl_cffi)"):
+        # 关键修复：用 .jar 而不是直接迭代 session.cookies
+        if _save_cookies_netscape(session.cookies, cookie_file, f"{platform} (curl_cffi)"):
             return cookie_file
 
     except ImportError:
@@ -275,23 +273,12 @@ def _get_fresh_cookies(url: str) -> str | None:
         "Accept-Language": "zh-CN,zh;q=0.9",
     })
 
-    homepage_map = {
-        "douyin": "https://www.douyin.com/",
-        "kuaishou": "https://www.kuaishou.com/",
-        "xiaohongshu": "https://www.xiaohongshu.com/",
-        "huoshan": "https://www.huoshan.com/",
-        "bilibili": "https://www.bilibili.com/",
-    }
-    homepage = homepage_map.get(platform)
-    if not homepage:
-        return None
-
     try:
-        session.get(homepage, timeout=10)
+        session.get(homepage or "https://www.douyin.com/", timeout=10)
     except Exception:
         pass
 
-    if _save_cookies_netscape(list(session.cookies), cookie_file, f"{platform} (requests)"):
+    if _save_cookies_netscape(session.cookies, cookie_file, f"{platform} (requests)"):
         return cookie_file
     return None
 
@@ -307,23 +294,24 @@ def _download_douyin_direct(url: str, output_path: str) -> str | None:
     try:
         session = cffi_requests.Session(impersonate="chrome120")
 
-        # Step 1: 跟随分享链接，获取视频 ID
+        # Step 1: 先访问 douyin.com 获取 ttwid 等 Cookie
+        try:
+            session.get("https://www.douyin.com/", timeout=15)
+            print(f"[douyin-direct] Got {len(list(session.cookies.jar))} cookies from homepage")
+        except Exception as e:
+            print(f"[douyin-direct] Homepage visit failed: {e}")
+
+        # Step 2: 跟随分享链接，获取视频 ID
         print(f"[douyin-direct] Following share link: {url}")
         resp = session.get(url, allow_redirects=True, timeout=15)
         final_url = str(resp.url)
 
         video_id = None
-        match = re.search(r'/video/(\d+)', final_url)
-        if match:
-            video_id = match.group(1)
-        else:
-            match = re.search(r'/note/(\d+)', final_url)
+        for pattern in [r"/video/(\d+)", r"/note/(\d+)", r"awemeId[\"\s:]+[\"\']?(\d{15,})"]:
+            match = re.search(pattern, final_url) or re.search(pattern, resp.text)
             if match:
                 video_id = match.group(1)
-            else:
-                match = re.search(r'"awemeId["\s:]+["\']?(\d{15,})', resp.text)
-                if match:
-                    video_id = match.group(1)
+                break
 
         if not video_id:
             print(f"[douyin-direct] Cannot find video ID from {final_url}")
@@ -331,53 +319,90 @@ def _download_douyin_direct(url: str, output_path: str) -> str | None:
 
         print(f"[douyin-direct] Video ID: {video_id}")
 
-        # Step 2: 尝试 iesdouyin 移动端 API（不需要 Cookie）
-        api_url = f"https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids={video_id}"
-        resp = session.get(api_url, timeout=15)
+        # Step 3: 尝试抖音 Web API
+        api_url = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
+        params = {
+            "aweme_id": video_id,
+            "aid": "6383",
+            "cookie_enabled": "true",
+            "device_platform": "webapp",
+            "channel": "channel_pc_web",
+            "version_code": "170400",
+        }
+        headers = {
+            "Referer": f"https://www.douyin.com/video/{video_id}",
+        }
+        try:
+            resp = session.get(api_url, params=params, headers=headers, timeout=15)
+            print(f"[douyin-direct] Web API status={resp.status_code}")
+        except Exception as e:
+            print(f"[douyin-direct] Web API failed: {e}")
+            resp = None
 
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             try:
                 data = resp.json()
-                items = data.get("item_list", [])
-                if items:
-                    item = items[0]
-                    video = item.get("video", {})
-                    play_addr = video.get("play_addr", {})
-                    url_list = play_addr.get("url_list", [])
-                    if url_list:
-                        video_url = url_list[0]
-                        # 替换为无水印 URL
-                        video_url = video_url.replace("playwm", "play")
-
-                        print(f"[douyin-direct] Found video URL, downloading...")
-                        video_resp = session.get(video_url, timeout=60)
-
-                        if video_resp.status_code == 200 and len(video_resp.content) > 1000:
-                            with open(output_path, "wb") as f:
-                                f.write(video_resp.content)
-                            print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
-                            return output_path
-                        else:
-                            print(f"[douyin-direct] Video download failed: status={video_resp.status_code}, size={len(video_resp.content)}")
+                detail = data.get("aweme_detail") or data.get("detail", {})
+                video = detail.get("video", {})
+                play_addr = video.get("play_addr", {})
+                url_list = play_addr.get("url_list", [])
+                if url_list:
+                    video_url = url_list[0].replace("playwm", "play")
+                    print(f"[douyin-direct] Found video URL from Web API")
+                    video_resp = session.get(video_url, timeout=60)
+                    if video_resp.status_code == 200 and len(video_resp.content) > 1000:
+                        with open(output_path, "wb") as f:
+                            f.write(video_resp.content)
+                        print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
+                        return output_path
+                    else:
+                        print(f"[douyin-direct] Download failed: status={video_resp.status_code}, size={len(video_resp.content)}")
+                else:
+                    print(f"[douyin-direct] No url_list in API response")
             except Exception as e:
                 print(f"[douyin-direct] API parse error: {e}")
-        else:
-            print(f"[douyin-direct] iesdouyin API status={resp.status_code}")
 
-        # Step 3: 尝试从视频页面 HTML 提取视频 URL
-        print("[douyin-direct] Trying page HTML extraction...")
+        # Step 4: 从视频页面 RENDER_DATA 提取
+        print("[douyin-direct] Trying RENDER_DATA extraction...")
         page_url = f"https://www.douyin.com/video/{video_id}"
-        resp = session.get(page_url, timeout=15)
+        resp = session.get(page_url, timeout=15, headers={"Referer": "https://www.douyin.com/"})
 
-        # 从 HTML 中搜索视频 URL
-        video_patterns = [
-            r'"playAddr"[^}]*"src":"([^"]+)"',
-            r'"play_addr"[^}]*"url_list":\["([^"]+)"',
-            r'playApi["\s:]+//[^"]+',
+        # RENDER_DATA 是 URL 编码的 JSON
+        render_match = re.search(r'<script id="RENDER_DATA"[^>]*>(.*?)</script>', resp.text, re.DOTALL)
+        if render_match:
+            render_data = urllib.parse.unquote(render_match.group(1))
+            print(f"[douyin-direct] RENDER_DATA length={len(render_data)}")
+
+            # 搜索视频 URL
+            video_patterns = [
+                r'"playAddr"[^}]*"src":"([^"]+)"',
+                r'"play_addr"[^}]*"url_list":\["([^"]+)"',
+                r'"playApi":"([^"]+)"',
+                r'"download_addr"[^}]*"url_list":\["([^"]+)"',
+                r'(https?://[^"]+douyinvod[^"]+)',
+                r'(https?://v[dl]-[^"]+\.mp4[^"]*)',
+            ]
+            for pattern in video_patterns:
+                match = re.search(pattern, render_data)
+                if match:
+                    video_url = match.group(1).replace("\\u002F", "/").replace("\\/", "/")
+                    print(f"[douyin-direct] Found video URL in RENDER_DATA")
+                    video_resp = session.get(video_url, timeout=60)
+                    if video_resp.status_code == 200 and len(video_resp.content) > 1000:
+                        with open(output_path, "wb") as f:
+                            f.write(video_resp.content)
+                        print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
+                        return output_path
+                    else:
+                        print(f"[douyin-direct] Download failed: status={video_resp.status_code}")
+
+        # Step 5: 从原始 HTML 搜索视频 URL（兜底）
+        print("[douyin-direct] Trying raw HTML extraction...")
+        for pattern in [
             r'(https?://[^"]+douyinvod[^"]+)',
-        ]
-
-        for pattern in video_patterns:
+            r'"playApi":"([^"]+)"',
+            r'(https?://v[dl]-[^"]+\.mp4[^"]*)',
+        ]:
             match = re.search(pattern, resp.text)
             if match:
                 video_url = match.group(1).replace("\\u002F", "/").replace("\\/", "/")
