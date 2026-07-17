@@ -477,6 +477,67 @@ def _download_douyin_thirdparty(url: str, output_path: str) -> str | None:
     return None
 
 
+def _download_kuaishou_thirdparty(url: str, output_path: str) -> str | None:
+    """快手：第三方解析接口获取无水印视频地址（无需 Cookie）
+
+    快手网页有强反爬：GraphQL 接口会弹验证码、__APOLLO_STATE__ 不含视频数据，
+    服务端直接抓页面拿不到地址。故走第三方解析接口（api.yujn.cn）。
+    该接口偶发超时，加重试。
+    """
+    import time
+    import requests as req_lib
+
+    api = f"https://api.yujn.cn/api/kuaishou.php?url={urllib.parse.quote(url, safe='')}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                      "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+    }
+    video_url = None
+    for attempt in range(1, 4):
+        try:
+            print(f"[ks-thirdparty] API try {attempt}...")
+            resp = req_lib.get(api, timeout=35, headers=headers)
+            data = resp.json()
+            if data.get("code") == 200:
+                d = data.get("data")
+                video_url = d.get("url") if isinstance(d, dict) else data.get("url")
+                if video_url:
+                    break
+            else:
+                print(f"[ks-thirdparty] API code={data.get('code')} msg={data.get('msg')}")
+        except Exception as e:
+            print(f"[ks-thirdparty] API err (attempt {attempt}): {e}")
+        time.sleep(2)
+
+    if not video_url:
+        print("[ks-thirdparty] No video URL obtained")
+        return None
+
+    print(f"[ks-thirdparty] Got video URL, downloading...")
+    try:
+        video_resp = req_lib.get(
+            video_url, timeout=60, stream=True,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.kuaishou.com/"})
+        if video_resp.status_code == 200:
+            downloaded = 0
+            with open(output_path, "wb") as f:
+                for chunk in video_resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+            if downloaded > 1000:
+                print(f"[ks-thirdparty] Downloaded {downloaded} bytes")
+                return output_path
+            else:
+                print(f"[ks-thirdparty] Download too small: {downloaded} bytes")
+                return None
+        else:
+            print(f"[ks-thirdparty] Download failed: status={video_resp.status_code}")
+    except Exception as e:
+        print(f"[ks-thirdparty] Download err: {e}")
+    return None
+
+
 def _download_video(url: str, output_path: str) -> str | None:
     """下载视频：抖音优先直接下载，其他用 yt-dlp"""
     platform = detect_platform(url)
@@ -494,11 +555,28 @@ def _download_video(url: str, output_path: str) -> str | None:
         print("[download] All Douyin methods failed")
         return None
 
+    # 快手：网页反爬强，服务端无法直接抓取，走第三方解析接口
+    if platform == "kuaishou":
+        print("[download] Trying Kuaishou third-party parser...")
+        result = _download_kuaishou_thirdparty(url, output_path)
+        if result:
+            return result
+        print("[download] Kuaishou third-party failed (yt-dlp 不支持快手，不再重试)")
+        return None
+
     # yt-dlp 下载
     import yt_dlp
 
     cookie_file = _get_fresh_cookies(url)
 
+    # Referer 必须按平台设置，否则 B站/小红书等会被拒
+    _referer_map = {
+        "douyin": "https://www.douyin.com/",
+        "kuaishou": "https://www.kuaishou.com/",
+        "bilibili": "https://www.bilibili.com/",
+        "xiaohongshu": "https://www.xiaohongshu.com/",
+        "huoshan": "https://www.huoshan.com/",
+    }
     ydl_opts = {
         "outtmpl": output_path,
         "format": "best[ext=mp4]/best",
@@ -509,7 +587,7 @@ def _download_video(url: str, output_path: str) -> str | None:
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://www.douyin.com/",
+            "Referer": _referer_map.get(platform, "https://www.douyin.com/"),
         },
     }
 
