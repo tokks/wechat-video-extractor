@@ -477,12 +477,104 @@ def _download_douyin_thirdparty(url: str, output_path: str) -> str | None:
     return None
 
 
-def _download_kuaishou_thirdparty(url: str, output_path: str) -> str | None:
-    """快手：第三方解析接口获取无水印视频地址（无需 Cookie）
+def _download_kuaishou_direct(url: str, output_path: str) -> str | None:
+    """快手：移动端UA直接抓取页面，从INIT_STATE提取视频地址（无需Cookie/第三方接口）
 
-    快手网页有强反爬：GraphQL 接口会弹验证码、__APOLLO_STATE__ 不含视频数据，
-    服务端直接抓页面拿不到地址。故走第三方解析接口（api.yujn.cn）。
-    该接口偶发超时，加重试。
+    关键发现：必须用移动端UA(iPhone)，桌面UA只返回SPA空壳不含视频数据。
+    移动端页面内嵌 window.INIT_STATE，含 mainMvUrls 视频直链。
+    首次即成功，不依赖第三方脆接口。
+    """
+    import re
+    import requests as req_lib
+    from curl_cffi import requests as cffi_req
+
+    # 剥掉分享参数，提取 photoId 和类型
+    type_m = re.search(r'kuaishou\.com/(short-video|long-video|photo)/([a-zA-Z0-9_-]+)', url)
+    if not type_m:
+        print("[ks-direct] Cannot extract photo ID from URL")
+        return None
+    content_type, photo_id = type_m.group(1), type_m.group(2)
+    page_url = f"https://www.kuaishou.com/{content_type}/{photo_id}"
+
+    MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+                 "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
+                 "Mobile/15E148 Safari/604.1 Edg/122.0.0.0")
+
+    print(f"[ks-direct] Fetching {page_url} (mobile UA)...")
+    try:
+        s = cffi_req.Session(impersonate="chrome")
+        resp = s.get(page_url, headers={
+            "User-Agent": MOBILE_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+        }, timeout=20)
+        html = resp.text
+        if len(html) < 5000:
+            print(f"[ks-direct] Page too small ({len(html)} bytes), likely blocked")
+            return None
+        print(f"[ks-direct] Got page, {len(html)} bytes")
+    except Exception as e:
+        print(f"[ks-direct] Fetch err: {e}")
+        return None
+
+    # 提取视频地址：优先 mainMvUrls，其次 photoUrl，再次 manifest backupUrl
+    video_url = None
+
+    mv_match = re.search(r'"mainMvUrls"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"(https?://[^"]+)"', html)
+    if mv_match:
+        video_url = mv_match.group(1)
+        print("[ks-direct] Found mainMvUrls URL")
+
+    if not video_url:
+        pu_match = re.search(r'"photoUrl"\s*:\s*"(https?://[^"]+)"', html)
+        if pu_match:
+            video_url = pu_match.group(1)
+            print("[ks-direct] Found photoUrl")
+
+    if not video_url:
+        mb_match = re.search(r'"backupUrl"\s*:\s*\[\s*"(https?://[^"]+\.mp4[^"]*)"', html)
+        if mb_match:
+            video_url = mb_match.group(1)
+            print("[ks-direct] Found manifest backupUrl")
+
+    if not video_url:
+        print("[ks-direct] No video URL found in page")
+        return None
+
+    # 处理可能的 unicode 转义
+    video_url = video_url.replace("\\u002F", "/").replace("\\/", "/")
+
+    # 下载视频
+    print(f"[ks-direct] Downloading video...")
+    try:
+        video_resp = req_lib.get(
+            video_url, timeout=60, stream=True,
+            headers={"User-Agent": MOBILE_UA, "Referer": "https://www.kuaishou.com/"})
+        if video_resp.status_code == 200:
+            downloaded = 0
+            with open(output_path, "wb") as f:
+                for chunk in video_resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+            if downloaded > 1000:
+                print(f"[ks-direct] Downloaded {downloaded} bytes")
+                return output_path
+            else:
+                print(f"[ks-direct] Download too small: {downloaded} bytes")
+                return None
+        else:
+            print(f"[ks-direct] Download failed: status={video_resp.status_code}")
+    except Exception as e:
+        print(f"[ks-direct] Download err: {e}")
+    return None
+
+
+def _download_kuaishou_thirdparty(url: str, output_path: str) -> str | None:
+    """快手：第三方解析接口获取无水印视频地址（兜底，直接抓取失败时用）
+
+    直接抓取(移动端UA)是主方案；此函数仅在直接抓取失败时兜底。
+    api.yujn.cn 接口偶发超时/返回null，加重试+null容错。
     """
     import time
     import requests as req_lib
@@ -497,14 +589,16 @@ def _download_kuaishou_thirdparty(url: str, output_path: str) -> str | None:
         try:
             print(f"[ks-thirdparty] API try {attempt}...")
             resp = req_lib.get(api, timeout=35, headers=headers)
-            data = resp.json()
-            if data.get("code") == 200:
+            data = resp.json() if resp.text.strip() else None
+            if isinstance(data, dict) and data.get("code") == 200:
                 d = data.get("data")
                 video_url = d.get("url") if isinstance(d, dict) else data.get("url")
                 if video_url:
                     break
-            else:
+            elif isinstance(data, dict):
                 print(f"[ks-thirdparty] API code={data.get('code')} msg={data.get('msg')}")
+            else:
+                print(f"[ks-thirdparty] API returned null/non-JSON")
         except Exception as e:
             print(f"[ks-thirdparty] API err (attempt {attempt}): {e}")
         time.sleep(2)
@@ -555,13 +649,17 @@ def _download_video(url: str, output_path: str) -> str | None:
         print("[download] All Douyin methods failed")
         return None
 
-    # 快手：网页反爬强，服务端无法直接抓取，走第三方解析接口
+    # 快手：优先直接抓取(移动端UA)，失败用第三方接口兜底
     if platform == "kuaishou":
-        print("[download] Trying Kuaishou third-party parser...")
+        print("[download] Trying Kuaishou direct download (mobile UA)...")
+        result = _download_kuaishou_direct(url, output_path)
+        if result:
+            return result
+        print("[download] Kuaishou direct failed, trying third-party API...")
         result = _download_kuaishou_thirdparty(url, output_path)
         if result:
             return result
-        print("[download] Kuaishou third-party failed (yt-dlp 不支持快手，不再重试)")
+        print("[download] All Kuaishou methods failed")
         return None
 
     # yt-dlp 下载
