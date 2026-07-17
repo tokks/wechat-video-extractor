@@ -300,6 +300,18 @@ def _find_json_key(data, key):
     return None
 
 
+def _find_item_list(data):
+    """从 _ROUTER_DATA 提取 item_list（标准路径优先，回退到任意 list 值）"""
+    # 标准路径: loaderData[<page>]['videoInfoRes']['item_list']
+    video_info = _find_json_key(data, "videoInfoRes")
+    if isinstance(video_info, dict) and isinstance(video_info.get("item_list"), list):
+        return video_info["item_list"]
+    item_list = _find_json_key(data, "item_list")
+    if isinstance(item_list, list):
+        return item_list
+    return None
+
+
 def _download_douyin_direct(url: str, output_path: str) -> str | None:
     """抖音直接下载 - 移动端分享页(window._ROUTER_DATA)解析，无需 Cookie"""
     try:
@@ -359,15 +371,24 @@ def _download_douyin_direct(url: str, output_path: str) -> str | None:
             return None
 
         # 递归查找 item_list（路径: loaderData['video_(id)/page']['videoInfoRes']['item_list']）
-        item_list = _find_json_key(router_data, "item_list")
+        item_list = _find_item_list(router_data)
         if not item_list:
             print(f"[douyin-direct] No item_list in _ROUTER_DATA")
             return None
 
-        item = item_list[0]
-        video = item.get("video", {})
+        item = item_list[0] if isinstance(item_list, list) else None
+        if not isinstance(item, dict):
+            print(f"[douyin-direct] item_list[0] is not a dict, skip")
+            return None
+        video = item.get("video") or {}
+        if not isinstance(video, dict):
+            print(f"[douyin-direct] item.video is not a dict, skip")
+            return None
         # play_addr 优先，download_addr 兜底
         play_addr = video.get("play_addr") or video.get("download_addr") or {}
+        if not isinstance(play_addr, dict):
+            print(f"[douyin-direct] no valid play_addr in item")
+            return None
         video_uri = play_addr.get("uri")
 
         if not video_uri:
@@ -376,22 +397,35 @@ def _download_douyin_direct(url: str, output_path: str) -> str | None:
         print(f"[douyin-direct] Video URI: {video_uri}")
 
         # Step 3: 请求播放接口，跟随重定向拿到真实 CDN 地址
+        # 关键: 用 stream=True 只取最终 URL，不下载 body
+        # （否则云环境带宽慢时，35MB body 在 30s 内下不完会触发 curl 超时）
         play_url = f"https://www.douyin.com/aweme/v1/play/?video_id={video_uri}"
         print(f"[douyin-direct] Requesting play URL...")
-        resp = session.get(play_url, timeout=30, allow_redirects=True)
+        resp = session.get(play_url, timeout=(10, 30), allow_redirects=True, stream=True)
         video_url = str(resp.url)
+        resp.close()  # 释放连接，不读取 body
         print(f"[douyin-direct] Final video URL: {video_url[:120]}")
 
-        # Step 4: 下载视频（带 Referer 避免 CDN 403）
+        # Step 4: 下载视频（流式 + 宽松读超时，避免云环境带宽慢导致整体超时）
+        # 读超时给 600s：云环境 ~156KB/s 下 35MB 约需 228s，留出充足余量
         print(f"[douyin-direct] Downloading video...")
-        video_resp = session.get(video_url, timeout=60)
-        if video_resp.status_code == 200 and len(video_resp.content) > 1000:
+        video_resp = session.get(video_url, timeout=(10, 600), stream=True)
+        if video_resp.status_code == 200:
+            downloaded = 0
             with open(output_path, "wb") as f:
-                f.write(video_resp.content)
-            print(f"[douyin-direct] Downloaded {len(video_resp.content)} bytes")
-            return output_path
+                for chunk in video_resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+            video_resp.close()
+            if downloaded > 1000:
+                print(f"[douyin-direct] Downloaded {downloaded} bytes")
+                return output_path
+            else:
+                print(f"[douyin-direct] Download too small: {downloaded} bytes")
+                return None
         else:
-            print(f"[douyin-direct] Download failed: status={video_resp.status_code}, size={len(video_resp.content)}")
+            print(f"[douyin-direct] Download failed: status={video_resp.status_code}")
             return None
 
     except Exception as e:
