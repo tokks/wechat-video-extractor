@@ -15,6 +15,7 @@ Page({
   },
 
   stopPolling: null,
+  _uploadTimer: null,
 
   onLoad(options) {
     this.setData({
@@ -29,30 +30,55 @@ Page({
       this.startPolling(this.data.taskId);
     }
 
-    // 上传类型由首页通过 eventChannel 通知进度/轮询/错误
+    // 上传类型：轮询 globalData.uploadState 获取上传进度
     if (this.data.type === 'upload') {
       this.setData({
         progress: 0,
         message: '准备上传...',
       });
-
-      const eventChannel = this.getOpenerEventChannel();
-      eventChannel.on('updateProgress', (data) => {
-        this.updateProgress(data.progress, data.message);
-      });
-      eventChannel.on('startPolling', (data) => {
-        this.startPolling(data.taskId);
-      });
-      eventChannel.on('onError', (data) => {
-        this.onError(data.message);
-      });
+      this._pollUploadState();
     }
   },
 
   onUnload() {
+    if (this._uploadTimer) {
+      clearTimeout(this._uploadTimer);
+      this._uploadTimer = null;
+    }
     if (this.stopPolling) {
       this.stopPolling();
     }
+  },
+
+  // 轮询 globalData 中的上传状态
+  _pollUploadState() {
+    var app = getApp();
+    var state = app.globalData.uploadState;
+
+    if (!state) {
+      this.onError('上传状态异常');
+      return;
+    }
+
+    if (state.error) {
+      this.onError(state.error);
+      return;
+    }
+
+    if (state.taskId) {
+      // 上传完成，开始轮询任务状态
+      this.startPolling(state.taskId);
+      return;
+    }
+
+    // 更新进度
+    this.updateProgress(state.progress, state.message);
+
+    // 300ms 后继续轮询
+    var self = this;
+    this._uploadTimer = setTimeout(function () {
+      self._pollUploadState();
+    }, 300);
   },
 
   // 供首页调用的方法

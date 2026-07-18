@@ -108,19 +108,28 @@ Page({
 
   // ── 开始分片上传 ──
   _startUpload(filePath, filename) {
+    const app = getApp();
+
+    // 在 globalData 中初始化上传状态，供 processing 页轮询
+    app.globalData.uploadState = {
+      progress: 0,
+      message: '准备上传...',
+      taskId: null,
+      error: null,
+    };
+
     wx.navigateTo({
       url: '/pages/processing/processing?type=upload&filename=' + encodeURIComponent(filename),
-      success: (res) => {
-        const eventChannel = res.eventChannel;
+    });
 
-        api.uploadFile(filePath, filename, (progress) => {
-          eventChannel.emit('updateProgress', { progress, message: '正在上传视频...' });
-        }).then((res2) => {
-          eventChannel.emit('startPolling', { taskId: res2.taskId });
-        }).catch((err) => {
-          eventChannel.emit('onError', { message: err.message || '上传失败' });
-        });
-      },
+    // 开始上传（不需要等导航完成，processing 页会轮询 globalData）
+    api.uploadFile(filePath, filename, (progress) => {
+      app.globalData.uploadState.progress = progress;
+      app.globalData.uploadState.message = '正在上传视频...';
+    }).then((res) => {
+      app.globalData.uploadState.taskId = res.taskId;
+    }).catch((err) => {
+      app.globalData.uploadState.error = err.message || '上传失败';
     });
   },
 });

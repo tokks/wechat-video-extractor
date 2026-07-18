@@ -16,21 +16,44 @@ const CHUNK_SIZE = app.globalData.chunkSize;
  */
 function callContainer(opts) {
   return new Promise((resolve, reject) => {
+    // 合并 header
+    var header = Object.assign(
+      { 'X-WX-SERVICE': SERVICE },
+      opts.header || { 'content-type': 'application/json' }
+    );
+
+    // 判断是否 JSON content-type
+    var isJson = false;
+    for (var key in header) {
+      if (key.toLowerCase() === 'content-type' && header[key].indexOf('application/json') !== -1) {
+        isJson = true;
+        break;
+      }
+    }
+
+    // 序列化 data：callContainer 不会自动 stringify JSON 对象
+    var sendData = opts.data;
+    if (isJson && sendData && typeof sendData === 'object') {
+      sendData = JSON.stringify(sendData);
+    }
+
     wx.cloud.callContainer({
       config: { env: CLOUD_ENV },
       path: opts.path,
       method: opts.method || 'GET',
-      header: Object.assign(
-        { 'X-WX-SERVICE': SERVICE },
-        opts.header || { 'content-type': 'application/json' }
-      ),
-      data: opts.data,
+      header: header,
+      data: sendData,
       dataType: opts.dataType || 'json',
       responseType: opts.responseType || 'text',
       success: (res) => {
         if (res.statusCode !== 200) {
+          console.error('[callContainer] HTTP', res.statusCode, opts.path, res.data);
           var msg = opts.errorMsg || ('HTTP ' + res.statusCode);
-          if (res.data && res.data.detail) msg = res.data.detail;
+          if (res.data && res.data.detail) {
+            msg = typeof res.data.detail === 'string'
+              ? res.data.detail
+              : JSON.stringify(res.data.detail);
+          }
           reject(new Error(msg));
           return;
         }
@@ -38,7 +61,8 @@ function callContainer(opts) {
       },
       fail: (err) => {
         console.error('[callContainer] fail:', opts.path, err);
-        reject(new Error(err.errMsg || '调用失败，请检查云环境配置'));
+        var errMsg = typeof err.errMsg === 'string' ? err.errMsg : JSON.stringify(err);
+        reject(new Error(errMsg || '调用失败，请检查云环境配置'));
       },
     });
   });
