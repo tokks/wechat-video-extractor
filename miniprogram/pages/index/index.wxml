@@ -9,10 +9,36 @@
     <text class="subtitle">支持聊天文件 / 相册视频</text>
   </view>
 
-  <!-- ========== 链接解析功能（审核期间临时屏蔽，通过后恢复） ==========
+  <!-- 从本地选择视频 -->
   <view class="section">
     <view class="section-title">
       <text class="section-num">1</text>
+      <text>从本地选择视频</text>
+    </view>
+    <view class="upload-options">
+      <view class="upload-card" bindtap="onChooseFromChat">
+        <text class="upload-icon">💬</text>
+        <text class="upload-label">微信聊天文件</text>
+        <text class="upload-desc">从聊天记录中选择视频</text>
+      </view>
+      <view class="upload-card" bindtap="onChooseFromAlbum">
+        <text class="upload-icon">📁</text>
+        <text class="upload-label">相册视频</text>
+        <text class="upload-desc">支持大于 1GB 的视频</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 更多方式（展开链接解析） -->
+  <view class="more-entry" bindtap="onToggleMore">
+    <text class="more-text">{{showLinkParse ? '收起' : '更多方式'}}</text>
+    <text class="more-arrow {{showLinkParse ? 'arrow-up' : ''}}">{{showLinkParse ? '▲' : '▼'}}</text>
+  </view>
+
+  <!-- 链接解析（默认隐藏，点击展开） -->
+  <view class="section" wx:if="{{showLinkParse}}">
+    <view class="section-title">
+      <text class="section-num">2</text>
       <text>粘贴视频链接</text>
     </view>
     <view class="link-input-wrap">
@@ -34,33 +60,6 @@
       <text wx:for="{{supportedPlatforms}}" wx:key="*this" class="tag">{{item}}</text>
     </view>
     <button class="btn-primary" bindtap="onParseLink">解析并提取音频</button>
-  </view>
-
-  <view class="divider">
-    <view class="divider-line"></view>
-    <text class="divider-text">或</text>
-    <view class="divider-line"></view>
-  </view>
-  ========== 链接解析功能结束 ========== -->
-
-  <!-- 从本地选择视频 -->
-  <view class="section">
-    <view class="section-title">
-      <text class="section-num">1</text>
-      <text>从本地选择视频</text>
-    </view>
-    <view class="upload-options">
-      <view class="upload-card" bindtap="onChooseFromChat">
-        <text class="upload-icon">💬</text>
-        <text class="upload-label">微信聊天文件</text>
-        <text class="upload-desc">从聊天记录中选择视频</text>
-      </view>
-      <view class="upload-card" bindtap="onChooseFromAlbum">
-        <text class="upload-icon">📁</text>
-        <text class="upload-label">相册视频</text>
-        <text class="upload-desc">支持大于 1GB 的视频</text>
-      </view>
-    </view>
   </view>
 
   <!-- 底部说明 -->

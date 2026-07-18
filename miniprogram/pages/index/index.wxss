@@ -178,3 +178,28 @@
   color: #444;
   font-size: 24rpx;
 }
+
+/* 更多方式入口 */
+.more-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16rpx 32rpx;
+  margin: 8rpx 0;
+}
+
+.more-text {
+  font-size: 26rpx;
+  color: #555;
+  margin-right: 12rpx;
+}
+
+.more-arrow {
+  font-size: 20rpx;
+  color: #555;
+  transition: transform 0.2s;
+}
+
+.arrow-up {
+  transform: rotate(180deg);
+}
