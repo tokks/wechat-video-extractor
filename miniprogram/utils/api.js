@@ -181,6 +181,10 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
           var chunkData = readRes.data; // ArrayBuffer
           console.log('[upload] 分片', index, '读取成功, 大小:', chunkData.byteLength);
 
+          // callContainer 不支持 ArrayBuffer 作为 data，转 base64 通过 JSON 发送
+          var base64Data = wx.arrayBufferToBase64(chunkData);
+          console.log('[upload] 分片', index, 'base64 编码后大小:', base64Data.length);
+
           function doUpload(retryCount) {
             wx.cloud.callContainer({
               config: { env: CLOUD_ENV },
@@ -188,9 +192,9 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
               method: 'POST',
               header: {
                 'X-WX-SERVICE': SERVICE,
-                'content-type': 'application/octet-stream',
+                'content-type': 'application/json',
               },
-              data: chunkData, // ArrayBuffer 直传
+              data: JSON.stringify({ chunk_data: base64Data }),
               dataType: 'json',
               success: function (res) {
                 if (res.statusCode !== 200) {
@@ -209,11 +213,12 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
                 uploadNext(index + 1);
               },
               fail: function (err) {
+                var errMsg = typeof err.errMsg === 'string' ? err.errMsg : JSON.stringify(err);
                 if (retryCount < 1) {
-                  console.error('[upload] 分片 ' + index + ' 网络失败, 重试...', err);
+                  console.error('[upload] 分片 ' + index + ' 网络失败, 重试...', errMsg);
                   doUpload(retryCount + 1);
                 } else {
-                  reject(new Error('上传失败，分片 ' + index + ': ' + (err.errMsg || '')));
+                  reject(new Error('上传失败，分片 ' + index + ': ' + errMsg));
                 }
               },
             });
