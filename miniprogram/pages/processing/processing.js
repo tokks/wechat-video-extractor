@@ -29,11 +29,22 @@ Page({
       this.startPolling(this.data.taskId);
     }
 
-    // 上传类型由首页调用 updateProgress / startPolling
+    // 上传类型由首页通过 eventChannel 通知进度/轮询/错误
     if (this.data.type === 'upload') {
       this.setData({
         progress: 0,
         message: '准备上传...',
+      });
+
+      const eventChannel = this.getOpenerEventChannel();
+      eventChannel.on('updateProgress', (data) => {
+        this.updateProgress(data.progress, data.message);
+      });
+      eventChannel.on('startPolling', (data) => {
+        this.startPolling(data.taskId);
+      });
+      eventChannel.on('onError', (data) => {
+        this.onError(data.message);
       });
     }
   },

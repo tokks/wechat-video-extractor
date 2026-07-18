@@ -92,23 +92,17 @@ Page({
   _startUpload(filePath, filename) {
     wx.navigateTo({
       url: '/pages/processing/processing?type=upload&filename=' + encodeURIComponent(filename),
-    });
+      success: (res) => {
+        const eventChannel = res.eventChannel;
 
-    const pages = getCurrentPages();
-    const processingPage = pages[pages.length - 1];
-
-    api.uploadFile(filePath, filename, (progress) => {
-      if (processingPage && processingPage.updateProgress) {
-        processingPage.updateProgress(progress, '正在上传视频...');
-      }
-    }).then((res) => {
-      if (processingPage && processingPage.startPolling) {
-        processingPage.startPolling(res.taskId);
-      }
-    }).catch((err) => {
-      if (processingPage && processingPage.onError) {
-        processingPage.onError(err.message || '上传失败');
-      }
+        api.uploadFile(filePath, filename, (progress) => {
+          eventChannel.emit('updateProgress', { progress, message: '正在上传视频...' });
+        }).then((res2) => {
+          eventChannel.emit('startPolling', { taskId: res2.taskId });
+        }).catch((err) => {
+          eventChannel.emit('onError', { message: err.message || '上传失败' });
+        });
+      },
     });
   },
 });

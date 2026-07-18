@@ -17,6 +17,7 @@ import tempfile
 import urllib.parse
 from pathlib import Path
 
+import aiofiles
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -781,7 +782,7 @@ async def upload_chunk(
     chunk_path = chunk_dir / f"chunk_{chunk_index:05d}"
 
     data = await chunk.read()
-    async with open(chunk_path, "wb") as f:
+    async with aiofiles.open(chunk_path, "wb") as f:
         await f.write(data)
 
     task["received_chunks"] = task.get("received_chunks", 0) + 1
@@ -804,12 +805,19 @@ async def upload_complete(task_id: str = Form(...)):
     chunk_dir = Path(task["chunk_dir"])
 
     # 合并所有分片
+    chunks = sorted(chunk_dir.glob("chunk_*"))
+    received = len(chunks)
+    total = task.get("total_chunks", 1)
+    if received < total:
+        missing = total - received
+        print(f"[upload] complete rejected: {received}/{total} chunks received, {missing} missing")
+        raise HTTPException(400, f"分片未全部到达: 已收到 {received}/{total}, 缺少 {missing}")
+
     task["status"] = "merging"
     task["message"] = "正在合并视频文件..."
     task["progress"] = 82
 
     video_path = task_dir / "video.mp4"
-    chunks = sorted(chunk_dir.glob("chunk_*"))
 
     with open(video_path, "wb") as out:
         for chunk_file in chunks:
