@@ -491,7 +491,7 @@ def _download_kuaishou_direct(url: str, output_path: str) -> str | None:
     # 剥掉分享参数，提取 photoId 和类型
     type_m = re.search(r'kuaishou\.com/(short-video|long-video|photo)/([a-zA-Z0-9_-]+)', url)
     if not type_m:
-        print("[ks-direct] Cannot extract photo ID from URL")
+        print(f"[ks-direct] Cannot extract photo ID from URL: {url}")
         return None
     content_type, photo_id = type_m.group(1), type_m.group(2)
     page_url = f"https://www.kuaishou.com/{content_type}/{photo_id}"
@@ -651,6 +651,22 @@ def _download_video(url: str, output_path: str) -> str | None:
 
     # 快手：优先直接抓取(移动端UA)，失败用第三方接口兜底
     if platform == "kuaishou":
+        # 如果是短链接(v.kuaishou.com / gifshow.com)，先跟随重定向拿到真实URL
+        if "v.kuaishou.com" in url or "gifshow.com" in url:
+            try:
+                print("[download] Resolving Kuaishou short link...")
+                import requests as _req
+                _r = _req.head(url, allow_redirects=True, timeout=10, headers={
+                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+                                  "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
+                                  "Mobile/15E148 Safari/604.1"})
+                if _r.url and "kuaishou.com" in _r.url:
+                    print(f"[download] Resolved: {url} -> {_r.url}")
+                    url = _r.url
+                else:
+                    print(f"[download] Resolve returned unexpected URL: {_r.url}")
+            except Exception as e:
+                print(f"[download] Resolve short link err: {e}")
         print("[download] Trying Kuaishou direct download (mobile UA)...")
         result = _download_kuaishou_direct(url, output_path)
         if result:
