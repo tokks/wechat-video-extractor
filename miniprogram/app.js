@@ -15,8 +15,9 @@ App({
     // 旧版公网域名（仅作参考，callContainer 模式下不需要）
     // baseUrl: 'https://video-extractor-283096-9-1454775300.sh.run.tcloudbase.com',
 
-    // 分片大小：2MB（callContainer body 限制 5MB，留余量）
-    chunkSize: 2 * 1024 * 1024,
+    // 分片大小：60KB
+    // callContainer 请求体限制 100KB，base64 膨胀 33%，60KB → ~80KB base64 → JSON ~82KB（安全余量）
+    chunkSize: 60 * 1024,
   },
 
   onLaunch() {
