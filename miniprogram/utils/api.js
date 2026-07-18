@@ -49,24 +49,39 @@ function uploadFile(filePath, filename, onProgress) {
           return;
         }
 
-        console.log(`[upload] 文件大小: ${(fileSize/1024/1024).toFixed(1)}MB, 分片数: ${totalChunks}`);
+        console.log('[upload] 文件大小: ' + (fileSize / 1024 / 1024).toFixed(1) + 'MB, 分片数: ' + totalChunks);
 
         // Step 2: 初始化上传
         initUpload(filename, totalChunks).then((initRes) => {
           const taskId = initRes.task_id;
+          console.log('[upload] init 成功, taskId:', taskId);
 
           // Step 3: 逐片上传
           uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress)
             .then(() => {
+              console.log('[upload] 所有分片上传完成');
               // Step 4: 合并并提取
               completeUpload(taskId).then((res) => {
+                console.log('[upload] complete 成功:', res);
                 resolve({ taskId });
-              }).catch(reject);
+              }).catch((err) => {
+                console.error('[upload] complete 失败:', err);
+                reject(err);
+              });
             })
-            .catch(reject);
-        }).catch(reject);
+            .catch((err) => {
+              console.error('[upload] 分片上传失败:', err);
+              reject(err);
+            });
+        }).catch((err) => {
+          console.error('[upload] init 失败:', err);
+          reject(err);
+        });
       },
-      fail: (err) => reject(new Error('无法读取文件: ' + err.errMsg)),
+      fail: (err) => {
+        console.error('[upload] stat 失败:', err);
+        reject(new Error('无法读取文件: ' + (err.errMsg || '')));
+      },
     });
   });
 }
@@ -101,16 +116,20 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
       const length = Math.min(CHUNK_SIZE, fileSize - position);
       const tempPath = tempDir + '/chunk_' + index + '.tmp';
 
+      console.log('[upload] 开始读取分片', index, 'position:', position, 'length:', length);
+
       fs.readFile({
         filePath: filePath,
         position: position,
         length: length,
         success: (readRes) => {
+          console.log('[upload] 分片', index, '读取成功, 大小:', readRes.data ? readRes.data.byteLength : 0);
           // 写成临时文件供 wx.uploadFile 使用
           fs.writeFile({
             filePath: tempPath,
             data: readRes.data,
             success: () => {
+              console.log('[upload] 分片', index, '临时文件写入成功');
               function doUpload(retryCount) {
                 wx.uploadFile({
                   url: BASE + '/api/upload/chunk',
@@ -134,6 +153,7 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
                     uploaded++;
                     const pct = Math.floor((uploaded / totalChunks) * 80);
                     if (onProgress) onProgress(pct);
+                    console.log('[upload] 分片', index, '上传成功, 进度:', pct + '%');
                     uploadNext(index + 1);
                   },
                   fail: (err) => {
@@ -149,10 +169,16 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
               }
               doUpload(0);
             },
-            fail: (err) => reject(new Error('写入临时文件失败: ' + (err.errMsg || ''))),
+            fail: (err) => {
+              console.error('[upload] 分片', index, '临时文件写入失败:', err);
+              reject(new Error('写入临时文件失败: ' + (err.errMsg || '')));
+            },
           });
         },
-        fail: (err) => reject(new Error('读取分片失败: ' + (err.errMsg || ''))),
+        fail: (err) => {
+          console.error('[upload] 分片', index, '读取失败:', err);
+          reject(new Error('读取分片失败: ' + (err.errMsg || '')));
+        },
       });
     }
 

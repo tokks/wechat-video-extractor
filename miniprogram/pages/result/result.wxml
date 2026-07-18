@@ -11,7 +11,12 @@
     <view class="audio-info">
       <text class="audio-icon">🎵</text>
       <view class="audio-meta">
-        <text class="audio-name">audio_{{taskId}}.mp3</text>
+        <input
+          class="audio-name-input"
+          value="{{filename}}"
+          bindinput="onFilenameInput"
+          maxlength="100"
+        />
         <text class="audio-size">{{audioSizeText}}</text>
       </view>
     </view>
@@ -23,18 +28,18 @@
     </view>
   </view>
 
-  <!-- 下载进度 -->
-  <view wx:if="{{isDownloading}}" class="download-progress">
+  <!-- 转发进度 -->
+  <view wx:if="{{isForwarding}}" class="download-progress">
     <view class="progress-bar">
-      <view class="progress-fill" style="width: {{downloadProgress}}%;"></view>
+      <view class="progress-fill" style="width: {{forwardProgress}}%;"></view>
     </view>
-    <text class="progress-text">下载中 {{downloadProgress}}%</text>
+    <text class="progress-text">准备转发 {{forwardProgress}}%</text>
   </view>
 
   <!-- 操作按钮 -->
   <view class="actions">
-    <button class="btn-primary" bindtap="onDownload" disabled="{{isDownloading}}">
-      {{isDownloading ? '下载中...' : '⬇ 保存到本地'}}
+    <button class="btn-primary" bindtap="onForwardToChat" disabled="{{isForwarding}}">
+      {{isForwarding ? '准备转发...' : '↗ 转发到微信'}}
     </button>
     <button class="btn-secondary" bindtap="onProcessAnother">
       🔄 再提取一个
@@ -43,6 +48,6 @@
 
   <!-- 底部提示 -->
   <view class="tips">
-    <text class="tip-text">💡 保存后可通过文件管理器找到音频</text>
+    <text class="tip-text">💡 先输入文件名，再点击转发到微信</text>
   </view>
 </view>

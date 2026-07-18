@@ -55,15 +55,15 @@ Page({
   onChooseFromChat() {
     wx.chooseMessageFile({
       count: 1,
-      type: 'file',
-      extension: ['mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'm4v', 'ts'],
+      type: 'all',  // 聊天记录里的视频可能属于 video 或 file，用 all 全部显示
       success: (res) => {
         const file = res.tempFiles[0];
-        console.log('[choose chat file]', file.name, file.size);
+        console.log('[choose chat file]', file.name, file.size, file.type);
         this._startUpload(file.path, file.name);
       },
-      fail: () => {
-        wx.showToast({ title: '已取消', icon: 'none' });
+      fail: (err) => {
+        console.error('[choose chat file fail]', err);
+        wx.showToast({ title: '已取消或选择失败', icon: 'none' });
       },
     });
   },
@@ -75,15 +75,33 @@ Page({
       mediaType: ['video'],
       sourceType: ['album'],
       maxDuration: 60 * 60,
-      camera: 'back',
       success: (res) => {
         const file = res.tempFiles[0];
         console.log('[choose album file]', file);
         const filename = 'video_' + Date.now() + '.mp4';
-        this._startUpload(file.tempFilePath, filename);
+
+        // 验证文件可读取，避免选择空文件或临时路径失效
+        const fs = wx.getFileSystemManager();
+        fs.stat({
+          path: file.tempFilePath,
+          success: (statRes) => {
+            const size = statRes.stats.size;
+            console.log('[album stat] size:', size);
+            if (size <= 0) {
+              wx.showToast({ title: '选择的视频文件为空', icon: 'none' });
+              return;
+            }
+            this._startUpload(file.tempFilePath, filename);
+          },
+          fail: (err) => {
+            console.error('[album stat fail]', err);
+            wx.showToast({ title: '无法读取该视频', icon: 'none' });
+          },
+        });
       },
-      fail: () => {
-        wx.showToast({ title: '已取消', icon: 'none' });
+      fail: (err) => {
+        console.error('[choose album fail]', err);
+        wx.showToast({ title: '选择取消或失败', icon: 'none' });
       },
     });
   },
