@@ -808,9 +808,13 @@ async def upload_chunk(
 
     if "application/json" in content_type:
         # JSON + base64 模式（callContainer 主路径）
+        # task_id/chunk_index 可以在 JSON body 或 query params 中
         body = await request.json()
-        task_id = body.get("task_id", "")
-        chunk_index = int(body.get("chunk_index", 0))
+        task_id = body.get("task_id") or request.query_params.get("task_id", "")
+        chunk_index_raw = body.get("chunk_index")
+        if chunk_index_raw is None:
+            chunk_index_raw = request.query_params.get("chunk_index", 0)
+        chunk_index = int(chunk_index_raw)
         chunk_b64 = body.get("chunk_data", "")
         data = base64.b64decode(chunk_b64)
     elif "multipart/form-data" in content_type:

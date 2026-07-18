@@ -194,7 +194,7 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
                 'X-WX-SERVICE': SERVICE,
                 'content-type': 'application/json',
               },
-              data: JSON.stringify({ chunk_data: base64Data }),
+              data: JSON.stringify({ task_id: taskId, chunk_index: index, chunk_data: base64Data }),
               dataType: 'json',
               success: function (res) {
                 if (res.statusCode !== 200) {
