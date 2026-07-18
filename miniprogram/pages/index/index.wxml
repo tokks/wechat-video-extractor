@@ -6,10 +6,10 @@
       <text class="iconfont">🎬</text>
     </view>
     <text class="title">视频提取音频</text>
-    <text class="subtitle">支持短视频链接 / 聊天文件 / 相册视频</text>
+    <text class="subtitle">支持聊天文件 / 相册视频</text>
   </view>
 
-  <!-- 方式一：粘贴链接 -->
+  <!-- ========== 链接解析功能（审核期间临时屏蔽，通过后恢复） ==========
   <view class="section">
     <view class="section-title">
       <text class="section-num">1</text>
@@ -36,17 +36,17 @@
     <button class="btn-primary" bindtap="onParseLink">解析并提取音频</button>
   </view>
 
-  <!-- 分割线 -->
   <view class="divider">
     <view class="divider-line"></view>
     <text class="divider-text">或</text>
     <view class="divider-line"></view>
   </view>
+  ========== 链接解析功能结束 ========== -->
 
-  <!-- 方式二/三：本地文件 -->
+  <!-- 从本地选择视频 -->
   <view class="section">
     <view class="section-title">
-      <text class="section-num">2</text>
+      <text class="section-num">1</text>
       <text>从本地选择视频</text>
     </view>
     <view class="upload-options">

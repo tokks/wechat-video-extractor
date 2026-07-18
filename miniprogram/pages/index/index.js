@@ -3,53 +3,49 @@ const api = require('../../utils/api.js');
 
 Page({
   data: {
-    linkInput: '',
-    supportedPlatforms: ['抖音', '快手', '火山', 'B站', '小红书'],
+    // 链接解析功能审核期间临时屏蔽，通过后取消注释恢复
+    // linkInput: '',
+    // supportedPlatforms: ['抖音', '快手', '火山', 'B站', '小红书'],
   },
 
-  // ── 链接输入 ──
-  onLinkInput(e) {
-    this.setData({ linkInput: e.detail.value });
-  },
-
-  onPasteLink() {
-    wx.getClipboardData({
-      success: (res) => {
-        this.setData({ linkInput: res.data });
-        wx.showToast({ title: '已粘贴', icon: 'success' });
-      },
-    });
-  },
-
-  onClearLink() {
-    this.setData({ linkInput: '' });
-  },
-
-  // ── 链接解析 ──
-  onParseLink() {
-    const url = this.data.linkInput.trim();
-    if (!url) {
-      wx.showToast({ title: '请输入链接', icon: 'none' });
-      return;
-    }
-
-    wx.showLoading({ title: '解析中...' });
-    api.parseLink(url).then((res) => {
-      wx.hideLoading();
-      wx.navigateTo({
-        url: '/pages/processing/processing?taskId=' + res.task_id +
-             '&platform=' + res.platform +
-             '&type=link',
-      });
-    }).catch((err) => {
-      wx.hideLoading();
-      wx.showModal({
-        title: '解析失败',
-        content: err.message || '请检查链接是否正确',
-        showCancel: false,
-      });
-    });
-  },
+  // ── 链接输入（审核期间临时屏蔽） ──
+  // onLinkInput(e) {
+  //   this.setData({ linkInput: e.detail.value });
+  // },
+  // onPasteLink() {
+  //   wx.getClipboardData({
+  //     success: (res) => {
+  //       this.setData({ linkInput: res.data });
+  //       wx.showToast({ title: '已粘贴', icon: 'success' });
+  //     },
+  //   });
+  // },
+  // onClearLink() {
+  //   this.setData({ linkInput: '' });
+  // },
+  // onParseLink() {
+  //   const url = this.data.linkInput.trim();
+  //   if (!url) {
+  //     wx.showToast({ title: '请输入链接', icon: 'none' });
+  //     return;
+  //   }
+  //   wx.showLoading({ title: '解析中...' });
+  //   api.parseLink(url).then((res) => {
+  //     wx.hideLoading();
+  //     wx.navigateTo({
+  //       url: '/pages/processing/processing?taskId=' + res.task_id +
+  //            '&platform=' + res.platform +
+  //            '&type=link',
+  //     });
+  //   }).catch((err) => {
+  //     wx.hideLoading();
+  //     wx.showModal({
+  //       title: '解析失败',
+  //       content: err.message || '请检查链接是否正确',
+  //       showCancel: false,
+  //     });
+  //   });
+  // },
 
   // ── 从微信聊天选择文件 ──
   onChooseFromChat() {
