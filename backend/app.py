@@ -798,38 +798,40 @@ async def upload_init(request: Request):
 @app.post("/api/upload/chunk")
 async def upload_chunk(
     request: Request,
-    task_id: str = Query(...),
-    chunk_index: int = Query(...),
 ):
     """上传一个分片
 
-    支持两种模式：
-    1. raw binary body (Content-Type: application/octet-stream) — callContainer 直接传 ArrayBuffer
-    2. JSON body {"chunk_data": "base64..."} — 兼容模式
-    3. multipart form (旧版，name="chunk") — 向后兼容
+    支持 JSON body: {"task_id": "...", "chunk_index": 0, "chunk_data": "base64..."}
+    也兼容旧版 query params + raw binary / multipart
     """
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        # JSON + base64 模式（callContainer 主路径）
+        body = await request.json()
+        task_id = body.get("task_id", "")
+        chunk_index = int(body.get("chunk_index", 0))
+        chunk_b64 = body.get("chunk_data", "")
+        data = base64.b64decode(chunk_b64)
+    elif "multipart/form-data" in content_type:
+        # 旧版 multipart 模式（向后兼容）
+        form = await request.form()
+        task_id = form.get("task_id", "")
+        chunk_index = int(form.get("chunk_index", 0))
+        chunk_file = form.get("chunk")
+        data = await chunk_file.read()
+    else:
+        # raw binary body 模式（query params 传 task_id/chunk_index）
+        task_id = request.query_params.get("task_id", "")
+        chunk_index = int(request.query_params.get("chunk_index", 0))
+        data = await request.body()
+
     if task_id not in TASKS:
         raise HTTPException(404, "任务不存在")
 
     task = TASKS[task_id]
     chunk_dir = Path(task["chunk_dir"])
     chunk_path = chunk_dir / f"chunk_{chunk_index:05d}"
-
-    content_type = request.headers.get("content-type", "")
-
-    if "application/json" in content_type:
-        # JSON + base64 模式
-        body = await request.json()
-        chunk_b64 = body.get("chunk_data", "")
-        data = base64.b64decode(chunk_b64)
-    elif "multipart/form-data" in content_type:
-        # 旧版 multipart 模式（向后兼容）
-        form = await request.form()
-        chunk_file = form.get("chunk")
-        data = await chunk_file.read()
-    else:
-        # raw binary body 模式（callContainer 直接传 ArrayBuffer）
-        data = await request.body()
 
     if not data:
         raise HTTPException(400, "分片数据为空")

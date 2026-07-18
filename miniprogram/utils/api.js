@@ -188,13 +188,17 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
           function doUpload(retryCount) {
             wx.cloud.callContainer({
               config: { env: CLOUD_ENV },
-              path: '/api/upload/chunk?task_id=' + taskId + '&chunk_index=' + index,
+              path: '/api/upload/chunk',
               method: 'POST',
               header: {
                 'X-WX-SERVICE': SERVICE,
                 'content-type': 'application/json',
               },
-              data: JSON.stringify({ chunk_data: base64Data }),
+              data: JSON.stringify({
+                task_id: taskId,
+                chunk_index: index,
+                chunk_data: base64Data,
+              }),
               dataType: 'json',
               success: function (res) {
                 if (res.statusCode !== 200) {
