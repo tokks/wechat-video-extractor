@@ -1,48 +1,87 @@
-// utils/api.js - 后端接口封装
+// utils/api.js - 后端接口封装（使用 wx.cloud.callContainer）
+//
+// 通过微信内网专线调用云托管服务，不需要公网域名、不需要备案。
+// 前提：app.js 里已经 wx.cloud.init({ env: cloudEnv })
 
 const app = getApp();
 
-const BASE = app.globalData.baseUrl;
+const CLOUD_ENV = app.globalData.cloudEnv;
+const SERVICE = app.globalData.containerService;
 const CHUNK_SIZE = app.globalData.chunkSize;
+
+/**
+ * 统一封装 wx.cloud.callContainer
+ * @param {object} opts - { path, method, data, header, dataType, responseType }
+ * @returns {Promise<object>} resolve(res) / reject(Error)
+ */
+function callContainer(opts) {
+  return new Promise((resolve, reject) => {
+    wx.cloud.callContainer({
+      config: { env: CLOUD_ENV },
+      path: opts.path,
+      method: opts.method || 'GET',
+      header: Object.assign(
+        { 'X-WX-SERVICE': SERVICE },
+        opts.header || { 'content-type': 'application/json' }
+      ),
+      data: opts.data,
+      dataType: opts.dataType || 'json',
+      responseType: opts.responseType || 'text',
+      success: (res) => {
+        if (res.statusCode !== 200) {
+          var msg = opts.errorMsg || ('HTTP ' + res.statusCode);
+          if (res.data && res.data.detail) msg = res.data.detail;
+          reject(new Error(msg));
+          return;
+        }
+        resolve(res);
+      },
+      fail: (err) => {
+        console.error('[callContainer] fail:', opts.path, err);
+        reject(new Error(err.errMsg || '调用失败，请检查云环境配置'));
+      },
+    });
+  });
+}
+
+// ════════════════════════════════════════
+//  1. 短视频链接解析
+// ════════════════════════════════════════
 
 /**
  * 解析短视频链接
  */
 function parseLink(url) {
-  return new Promise((resolve, reject) => {
-    wx.request({
-      url: BASE + '/api/parse-link',
-      method: 'POST',
-      header: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      data: { url: url },
-      success: (res) => {
-        if (res.statusCode === 200) {
-          resolve(res.data);
-        } else {
-          reject(new Error(res.data.detail || '解析失败'));
-        }
-      },
-      fail: (err) => reject(err),
-    });
-  });
+  return callContainer({
+    path: '/api/parse-link',
+    method: 'POST',
+    header: { 'content-type': 'application/json' },
+    data: { url: url },
+    errorMsg: '解析失败',
+  }).then((res) => res.data);
 }
+
+// ════════════════════════════════════════
+//  2. 分片上传大文件
+// ════════════════════════════════════════
 
 /**
  * 分片上传大文件
  * @param {string} filePath - 本地文件路径
  * @param {string} filename - 文件名
  * @param {function} onProgress - 进度回调 (0~100)
+ * @returns {Promise<{taskId: string}>}
  */
 function uploadFile(filePath, filename, onProgress) {
   return new Promise((resolve, reject) => {
-    const fs = wx.getFileSystemManager();
+    var fs = wx.getFileSystemManager();
 
     // Step 1: 获取文件信息
     fs.stat({
       path: filePath,
-      success: (statRes) => {
-        const fileSize = statRes.stats.size;
-        const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+      success: function (statRes) {
+        var fileSize = statRes.stats.size;
+        var totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 
         if (totalChunks === 0) {
           reject(new Error('文件为空'));
@@ -52,33 +91,31 @@ function uploadFile(filePath, filename, onProgress) {
         console.log('[upload] 文件大小: ' + (fileSize / 1024 / 1024).toFixed(1) + 'MB, 分片数: ' + totalChunks);
 
         // Step 2: 初始化上传
-        initUpload(filename, totalChunks).then((initRes) => {
-          const taskId = initRes.task_id;
+        initUpload(filename, totalChunks).then(function (initRes) {
+          var taskId = initRes.task_id;
           console.log('[upload] init 成功, taskId:', taskId);
 
           // Step 3: 逐片上传
           uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress)
-            .then(() => {
+            .then(function () {
               console.log('[upload] 所有分片上传完成');
               // Step 4: 合并并提取
-              completeUpload(taskId).then((res) => {
-                console.log('[upload] complete 成功:', res);
-                resolve({ taskId });
-              }).catch((err) => {
-                console.error('[upload] complete 失败:', err);
-                reject(err);
-              });
+              return completeUpload(taskId);
             })
-            .catch((err) => {
-              console.error('[upload] 分片上传失败:', err);
+            .then(function (res) {
+              console.log('[upload] complete 成功:', res);
+              resolve({ taskId: taskId });
+            })
+            .catch(function (err) {
+              console.error('[upload] 失败:', err);
               reject(err);
             });
-        }).catch((err) => {
+        }).catch(function (err) {
           console.error('[upload] init 失败:', err);
           reject(err);
         });
       },
-      fail: (err) => {
+      fail: function (err) {
         console.error('[upload] stat 失败:', err);
         reject(new Error('无法读取文件: ' + (err.errMsg || '')));
       },
@@ -87,23 +124,19 @@ function uploadFile(filePath, filename, onProgress) {
 }
 
 function initUpload(filename, totalChunks) {
-  return new Promise((resolve, reject) => {
-    wx.request({
-      url: BASE + '/api/upload/init',
-      method: 'POST',
-      header: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      data: { filename, total_chunks: totalChunks },
-      success: (res) => res.statusCode === 200 ? resolve(res.data) : reject(new Error('初始化失败')),
-      fail: reject,
-    });
-  });
+  return callContainer({
+    path: '/api/upload/init',
+    method: 'POST',
+    header: { 'content-type': 'application/json' },
+    data: { filename: filename, total_chunks: totalChunks },
+    errorMsg: '初始化失败',
+  }).then(function (res) { return res.data; });
 }
 
 function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
-  return new Promise((resolve, reject) => {
-    const fs = wx.getFileSystemManager();
-    let uploaded = 0;
-    const tempDir = wx.env.USER_DATA_PATH;
+  return new Promise(function (resolve, reject) {
+    var fs = wx.getFileSystemManager();
+    var uploaded = 0;
 
     function uploadNext(index) {
       if (index >= totalChunks) {
@@ -111,10 +144,8 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
         return;
       }
 
-      // 用 position+length 读取真正的分片数据（不是整个文件）
-      const position = index * CHUNK_SIZE;
-      const length = Math.min(CHUNK_SIZE, fileSize - position);
-      const tempPath = tempDir + '/chunk_' + index + '.tmp';
+      var position = index * CHUNK_SIZE;
+      var length = Math.min(CHUNK_SIZE, fileSize - position);
 
       console.log('[upload] 开始读取分片', index, 'position:', position, 'length:', length);
 
@@ -122,60 +153,50 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
         filePath: filePath,
         position: position,
         length: length,
-        success: (readRes) => {
-          console.log('[upload] 分片', index, '读取成功, 大小:', readRes.data ? readRes.data.byteLength : 0);
-          // 写成临时文件供 wx.uploadFile 使用
-          fs.writeFile({
-            filePath: tempPath,
-            data: readRes.data,
-            success: () => {
-              console.log('[upload] 分片', index, '临时文件写入成功');
-              function doUpload(retryCount) {
-                wx.uploadFile({
-                  url: BASE + '/api/upload/chunk',
-                  filePath: tempPath,
-                  name: 'chunk',
-                  formData: { task_id: taskId, chunk_index: index },
-                  success: (res) => {
-                    // 必须检查状态码，4xx/5xx 不是成功
-                    if (res.statusCode !== 200) {
-                      if (retryCount < 1) {
-                        console.error('[upload] 分片 ' + index + ' 返回 HTTP ' + res.statusCode + ', 重试...');
-                        doUpload(retryCount + 1);
-                      } else {
-                        fs.unlink({ filePath: tempPath, fail: function() {} });
-                        reject(new Error('分片 ' + index + ' 上传失败: HTTP ' + res.statusCode));
-                      }
-                      return;
-                    }
-                    // 清理临时文件
-                    fs.unlink({ filePath: tempPath, fail: function() {} });
-                    uploaded++;
-                    const pct = Math.floor((uploaded / totalChunks) * 80);
-                    if (onProgress) onProgress(pct);
-                    console.log('[upload] 分片', index, '上传成功, 进度:', pct + '%');
-                    uploadNext(index + 1);
-                  },
-                  fail: (err) => {
-                    if (retryCount < 1) {
-                      console.error('[upload] 分片 ' + index + ' 网络失败, 重试...', err);
-                      doUpload(retryCount + 1);
-                    } else {
-                      fs.unlink({ filePath: tempPath, fail: function() {} });
-                      reject(new Error('上传失败，分片 ' + index + ': ' + (err.errMsg || '')));
-                    }
-                  },
-                });
-              }
-              doUpload(0);
-            },
-            fail: (err) => {
-              console.error('[upload] 分片', index, '临时文件写入失败:', err);
-              reject(new Error('写入临时文件失败: ' + (err.errMsg || '')));
-            },
-          });
+        success: function (readRes) {
+          var chunkData = readRes.data; // ArrayBuffer
+          console.log('[upload] 分片', index, '读取成功, 大小:', chunkData.byteLength);
+
+          function doUpload(retryCount) {
+            wx.cloud.callContainer({
+              config: { env: CLOUD_ENV },
+              path: '/api/upload/chunk?task_id=' + taskId + '&chunk_index=' + index,
+              method: 'POST',
+              header: {
+                'X-WX-SERVICE': SERVICE,
+                'content-type': 'application/octet-stream',
+              },
+              data: chunkData, // ArrayBuffer 直传
+              dataType: 'json',
+              success: function (res) {
+                if (res.statusCode !== 200) {
+                  if (retryCount < 1) {
+                    console.error('[upload] 分片 ' + index + ' 返回 HTTP ' + res.statusCode + ', 重试...');
+                    doUpload(retryCount + 1);
+                  } else {
+                    reject(new Error('分片 ' + index + ' 上传失败: HTTP ' + res.statusCode));
+                  }
+                  return;
+                }
+                uploaded++;
+                var pct = Math.floor((uploaded / totalChunks) * 80);
+                if (onProgress) onProgress(pct);
+                console.log('[upload] 分片', index, '上传成功, 进度:', pct + '%');
+                uploadNext(index + 1);
+              },
+              fail: function (err) {
+                if (retryCount < 1) {
+                  console.error('[upload] 分片 ' + index + ' 网络失败, 重试...', err);
+                  doUpload(retryCount + 1);
+                } else {
+                  reject(new Error('上传失败，分片 ' + index + ': ' + (err.errMsg || '')));
+                }
+              },
+            });
+          }
+          doUpload(0);
         },
-        fail: (err) => {
+        fail: function (err) {
           console.error('[upload] 分片', index, '读取失败:', err);
           reject(new Error('读取分片失败: ' + (err.errMsg || '')));
         },
@@ -187,35 +208,43 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
 }
 
 function completeUpload(taskId) {
-  return new Promise((resolve, reject) => {
-    wx.request({
-      url: BASE + '/api/upload/complete',
-      method: 'POST',
-      header: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      data: { task_id: taskId },
-      success: (res) => res.statusCode === 200 ? resolve(res.data) : reject(new Error('合并失败')),
-      fail: reject,
-    });
-  });
+  return callContainer({
+    path: '/api/upload/complete',
+    method: 'POST',
+    header: { 'content-type': 'application/json' },
+    data: { task_id: taskId },
+    errorMsg: '合并失败',
+  }).then(function (res) { return res.data; });
 }
+
+// ════════════════════════════════════════
+//  3. 轮询任务状态
+// ════════════════════════════════════════
 
 /**
  * 轮询任务状态
+ * @param {string} taskId
+ * @param {function} onUpdate - 回调，收到任务状态对象
+ * @param {number} interval - 轮询间隔 ms
+ * @returns {function} stop - 停止轮询
  */
 function pollTask(taskId, onUpdate, interval) {
   interval = interval || 1500;
-  let timer = null;
-  let stopped = false;
+  var timer = null;
+  var stopped = false;
 
   function check() {
     if (stopped) return;
 
-    wx.request({
-      url: BASE + '/api/task/' + taskId,
+    wx.cloud.callContainer({
+      config: { env: CLOUD_ENV },
+      path: '/api/task/' + taskId,
       method: 'GET',
-      success: (res) => {
+      header: { 'X-WX-SERVICE': SERVICE },
+      dataType: 'json',
+      success: function (res) {
         if (res.statusCode === 200) {
-          const data = res.data;
+          var data = res.data;
           if (onUpdate) onUpdate(data);
 
           if (data.status === 'done' || data.status === 'error') {
@@ -224,7 +253,7 @@ function pollTask(taskId, onUpdate, interval) {
           }
         }
       },
-      complete: () => {
+      complete: function () {
         if (!stopped) {
           timer = setTimeout(check, interval);
         }
@@ -234,24 +263,128 @@ function pollTask(taskId, onUpdate, interval) {
 
   check();
 
-  // 返回停止函数
   return function stop() {
     stopped = true;
     if (timer) clearTimeout(timer);
   };
 }
 
+// ════════════════════════════════════════
+//  4. 音频下载（通过 callContainer 获取，保存到本地）
+// ════════════════════════════════════════
+
 /**
- * 获取音频下载 URL
+ * 下载音频文件到本地临时路径
+ * callContainer 不支持公网 URL 访问，所以先通过内网拉取文件，保存到本地。
+ *
+ * @param {string} taskId
+ * @param {function} onProgress - 可选，下载进度回调 (0~100)
+ * @returns {Promise<string>} localFilePath - 本地文件路径
  */
-function getAudioUrl(taskId) {
-  return BASE + '/api/audio/' + taskId;
+function downloadAudio(taskId, onProgress) {
+  return new Promise(function (resolve, reject) {
+    // 先尝试 responseType: 'arraybuffer' 直接获取二进制
+    wx.cloud.callContainer({
+      config: { env: CLOUD_ENV },
+      path: '/api/audio/' + taskId,
+      method: 'GET',
+      header: { 'X-WX-SERVICE': SERVICE },
+      responseType: 'arraybuffer',
+      success: function (res) {
+        if (res.statusCode !== 200) {
+          // 如果直接获取二进制失败，回退到 base64 方式
+          console.log('[audio] arraybuffer 模式失败, 尝试 base64...');
+          _downloadAudioBase64(taskId, onProgress, resolve, reject);
+          return;
+        }
+
+        var data = res.data;
+        // 如果返回的是 ArrayBuffer，直接保存
+        if (data instanceof ArrayBuffer) {
+          _saveAudioFile(taskId, data, resolve, reject);
+        } else if (typeof data === 'object' && data.audio) {
+          // base64 模式回退的响应
+          var ab = _base64ToArrayBuffer(data.audio);
+          _saveAudioFile(taskId, ab, resolve, reject);
+        } else {
+          // 未知格式，尝试 base64 回退
+          _downloadAudioBase64(taskId, onProgress, resolve, reject);
+        }
+      },
+      fail: function (err) {
+        console.error('[audio] callContainer fail:', err);
+        // 回退到 base64 方式
+        _downloadAudioBase64(taskId, onProgress, resolve, reject);
+      },
+    });
+  });
 }
 
+function _downloadAudioBase64(taskId, onProgress, resolve, reject) {
+  wx.cloud.callContainer({
+    config: { env: CLOUD_ENV },
+    path: '/api/audio-base64/' + taskId,
+    method: 'GET',
+    header: { 'X-WX-SERVICE': SERVICE },
+    dataType: 'json',
+    success: function (res) {
+      if (res.statusCode !== 200 || !res.data || !res.data.audio) {
+        reject(new Error('音频下载失败: HTTP ' + res.statusCode));
+        return;
+      }
+      var ab = _base64ToArrayBuffer(res.data.audio);
+      _saveAudioFile(taskId, ab, resolve, reject);
+    },
+    fail: function (err) {
+      reject(new Error('下载失败: ' + (err.errMsg || '')));
+    },
+  });
+}
+
+function _base64ToArrayBuffer(base64) {
+  // 微信小程序 base64 → ArrayBuffer
+  return wx.base64ToArrayBuffer(base64);
+}
+
+function _saveAudioFile(taskId, arrayBuffer, resolve, reject) {
+  var fs = wx.getFileSystemManager();
+  var filePath = wx.env.USER_DATA_PATH + '/audio_' + taskId + '.mp3';
+
+  fs.writeFile({
+    filePath: filePath,
+    data: arrayBuffer,
+    success: function () {
+      console.log('[audio] 保存成功:', filePath, '大小:', arrayBuffer.byteLength);
+      resolve(filePath);
+    },
+    fail: function (err) {
+      console.error('[audio] 保存失败:', err);
+      reject(new Error('保存音频失败: ' + (err.errMsg || '')));
+    },
+  });
+}
+
+// ════════════════════════════════════════
+//  5. 删除任务
+// ════════════════════════════════════════
+
+function deleteTask(taskId) {
+  return callContainer({
+    path: '/api/task/' + taskId,
+    method: 'DELETE',
+    errorMsg: '删除失败',
+  }).then(function (res) { return res.data; });
+}
+
+// ════════════════════════════════════════
+//  导出
+// ════════════════════════════════════════
+
 module.exports = {
-  parseLink,
-  uploadFile,
-  pollTask,
-  getAudioUrl,
-  BASE,
+  parseLink: parseLink,
+  uploadFile: uploadFile,
+  pollTask: pollTask,
+  downloadAudio: downloadAudio,
+  deleteTask: deleteTask,
+  callContainer: callContainer,
 };

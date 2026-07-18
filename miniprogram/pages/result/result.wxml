@@ -6,8 +6,25 @@
   </view>
   <text class="success-title">音频提取完成</text>
 
+  <!-- 音频加载中 -->
+  <view wx:if="{{isLoading}}" class="card">
+    <view style="padding: 40rpx; text-align: center;">
+      <view class="spinner" style="margin: 0 auto 20rpx;"></view>
+      <text class="progress-message">正在加载音频...</text>
+    </view>
+  </view>
+
+  <!-- 音频加载失败 -->
+  <view wx:elif="{{loadError}}" class="card">
+    <view style="padding: 40rpx; text-align: center;">
+      <text class="emoji">😕</text>
+      <text class="error-msg">{{loadError}}</text>
+      <button class="btn-primary" bindtap="onProcessAnother" style="margin-top: 30rpx;">返回重试</button>
+    </view>
+  </view>
+
   <!-- 音频信息卡片 -->
-  <view class="card">
+  <view wx:else class="card">
     <view class="audio-info">
       <text class="audio-icon">🎵</text>
       <view class="audio-meta">
@@ -37,7 +54,7 @@
   </view>
 
   <!-- 操作按钮 -->
-  <view class="actions">
+  <view wx:if="{{!isLoading && !loadError}}" class="actions">
     <button class="btn-primary" bindtap="onForwardToChat" disabled="{{isForwarding}}">
       {{isForwarding ? '准备转发...' : '↗ 转发到微信'}}
     </button>
@@ -47,7 +64,7 @@
   </view>
 
   <!-- 底部提示 -->
-  <view class="tips">
+  <view wx:if="{{!isLoading && !loadError}}" class="tips">
     <text class="tip-text">💡 先输入文件名，再点击转发到微信</text>
   </view>
 </view>

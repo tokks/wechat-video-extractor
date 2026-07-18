@@ -11,6 +11,7 @@ import os
 import re
 import uuid
 import json
+import base64
 import shutil
 import asyncio
 import tempfile
@@ -18,7 +19,7 @@ import urllib.parse
 from pathlib import Path
 
 import aiofiles
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -111,11 +112,23 @@ def extract_url(text: str) -> str:
 
 
 @app.post("/api/parse-link")
-async def parse_link(url: str = Form(...)):
+async def parse_link(request: Request):
     """
     解析短视频链接并提取音频
     返回 task_id，后台异步处理
+
+    支持 JSON body: {"url": "..."}
+    也兼容旧版 form-urlencoded: url=...
     """
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        body = await request.json()
+        url = body.get("url", "")
+    else:
+        form = await request.form()
+        url = form.get("url", "")
+
     # 从分享文案中提取真正的 URL
     url = extract_url(url)
     platform = detect_platform(url)
@@ -750,8 +763,23 @@ def _download_video(url: str, output_path: str) -> str | None:
 # ════════════════════════════════════════
 
 @app.post("/api/upload/init")
-async def upload_init(filename: str = Form(...), total_chunks: int = Form(...)):
-    """初始化分片上传会话"""
+async def upload_init(request: Request):
+    """初始化分片上传会话
+
+    支持 JSON body: {"filename": "...", "total_chunks": 10}
+    也兼容旧版 form-urlencoded
+    """
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        body = await request.json()
+        filename = body.get("filename", "video.mp4")
+        total_chunks = int(body.get("total_chunks", 1))
+    else:
+        form = await request.form()
+        filename = form.get("filename", "video.mp4")
+        total_chunks = int(form.get("total_chunks", 1))
+
     task_id = create_task("upload")
     task_dir = TASK_DIR / task_id
     chunk_dir = task_dir / "chunks"
@@ -769,11 +797,17 @@ async def upload_init(filename: str = Form(...), total_chunks: int = Form(...)):
 
 @app.post("/api/upload/chunk")
 async def upload_chunk(
-    task_id: str = Form(...),
-    chunk_index: int = Form(...),
-    chunk: UploadFile = File(...),
+    request: Request,
+    task_id: str = Query(...),
+    chunk_index: int = Query(...),
 ):
-    """上传一个分片"""
+    """上传一个分片
+
+    支持两种模式：
+    1. raw binary body (Content-Type: application/octet-stream) — callContainer 直接传 ArrayBuffer
+    2. JSON body {"chunk_data": "base64..."} — 兼容模式
+    3. multipart form (旧版，name="chunk") — 向后兼容
+    """
     if task_id not in TASKS:
         raise HTTPException(404, "任务不存在")
 
@@ -781,7 +815,25 @@ async def upload_chunk(
     chunk_dir = Path(task["chunk_dir"])
     chunk_path = chunk_dir / f"chunk_{chunk_index:05d}"
 
-    data = await chunk.read()
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        # JSON + base64 模式
+        body = await request.json()
+        chunk_b64 = body.get("chunk_data", "")
+        data = base64.b64decode(chunk_b64)
+    elif "multipart/form-data" in content_type:
+        # 旧版 multipart 模式（向后兼容）
+        form = await request.form()
+        chunk_file = form.get("chunk")
+        data = await chunk_file.read()
+    else:
+        # raw binary body 模式（callContainer 直接传 ArrayBuffer）
+        data = await request.body()
+
+    if not data:
+        raise HTTPException(400, "分片数据为空")
+
     async with aiofiles.open(chunk_path, "wb") as f:
         await f.write(data)
 
@@ -795,8 +847,21 @@ async def upload_chunk(
 
 
 @app.post("/api/upload/complete")
-async def upload_complete(task_id: str = Form(...)):
-    """合并分片并提取音频"""
+async def upload_complete(request: Request):
+    """合并分片并提取音频
+
+    支持 JSON body: {"task_id": "..."}
+    也兼容旧版 form-urlencoded
+    """
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        body = await request.json()
+        task_id = body.get("task_id", "")
+    else:
+        form = await request.form()
+        task_id = form.get("task_id", "")
+
     if task_id not in TASKS:
         raise HTTPException(404, "任务不存在")
 
@@ -931,6 +996,35 @@ async def download_audio(task_id: str):
         media_type="audio/mpeg",
         filename=filename,
     )
+
+
+@app.get("/api/audio-base64/{task_id}")
+async def download_audio_base64(task_id: str):
+    """下载音频文件（base64 编码）
+
+    供 wx.cloud.callContainer 使用：callContainer 不一定支持
+    responseType: 'arraybuffer'，用 base64 文本传输更可靠。
+    """
+    if task_id not in TASKS:
+        raise HTTPException(404, "任务不存在")
+
+    task = TASKS[task_id]
+    if task["status"] != "done" or not task.get("audio_path"):
+        raise HTTPException(400, "音频尚未就绪")
+
+    audio_path = task["audio_path"]
+    if not Path(audio_path).exists():
+        raise HTTPException(404, "音频文件不存在")
+
+    audio_bytes = Path(audio_path).read_bytes()
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+    filename = f"audio_{task_id}.mp3"
+
+    return {
+        "audio": audio_b64,
+        "filename": filename,
+        "size": len(audio_bytes),
+    }
 
 
 @app.delete("/api/task/{task_id}")

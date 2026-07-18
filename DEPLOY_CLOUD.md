@@ -118,17 +118,35 @@ App({
 4. **详情 → 本地设置 → 勾选「不校验合法域名」**
 5. 按 **Ctrl + B** 重新编译
 
-### 3. 正式上线时配域名
+### 3. 配置 wx.cloud.callContainer（✅ 免域名、免备案）
 
-1. 登录 [微信公众平台](https://mp.weixin.qq.com)
-2. 开发管理 → 开发设置 → 服务器域名
-3. 在 **request 合法域名** 和 **downloadFile 合法域名** 都加上：
-   ```
-   https://video-extractor-xxxxx.tcloudbaseapp.com
-   ```
+> **方案已升级**：小程序通过 `wx.cloud.callContainer` 经微信内网调用云托管服务，**不需要公网域名、不需要备案**。
+>
+> 之前使用公网测试域名 `xxx.sh.run.tcloudbase.com` 会遇到腾讯云「风险提醒」中间页，导致小程序报 `连接断开 / 服务器忙 / cmdId 1006, errCode -1`。改用 callContainer 后彻底解决。
 
-> 注意：云托管的默认公网域名（xxx.tcloudbaseapp.com）可以用于开发调试。
-> 如果要正式上线给用户用，需要绑定**已备案的自定义域名**。
+#### 步骤
+
+1. 登录 [微信云托管控制台](https://cloud.weixin.qq.com/cloudrun)
+2. 左上角找到**环境 ID**（类似 `prod-xxxxx` 或 `video-extractor-xxxxx`），复制下来
+3. 打开 `miniprogram/app.js`，把 `cloudEnv` 替换成你的环境 ID：
+   ```js
+   globalData: {
+     cloudEnv: 'prod-xxxxxxxx',           // ← 改成你的云托管环境 ID
+     containerService: 'video-extractor', // 云托管服务名（创建服务时填的名字）
+   }
+   ```
+4. 确认服务名 `containerService` 和你在云托管控制台创建的服务名一致（默认是 `video-extractor`）
+
+#### 原理对比
+
+| | 旧方案（公网域名） | 新方案（callContainer） |
+|---|---|---|
+| 路径 | 小程序 → 公网域名（被中间页拦截）→ 后端 | 小程序 → 微信内网专线 → 后端 |
+| 需要域名 | ✅ 需要备案的自定义域名 | ❌ 不需要 |
+| 服务器域名白名单 | 需要配 request/uploadFile/downloadFile | 不需要 |
+| 费用 | 域名费 + 备案时间 | 免费、立即生效 |
+| 安全性 | 暴露在公网 | 微信内网，自带防护 |
+
 
 ---
 
@@ -187,12 +205,11 @@ App({
 
 - [ ] 已注册微信小程序，拿到 AppID
 - [ ] 云托管环境已创建
-- [ ] 服务已创建，公网访问已开启
+- [ ] 服务已创建（`video-extractor`），公网访问已开启
 - [ ] 代码已部署，`/api/health` 返回正常
 - [ ] 资源规格调整为 1核 2G 以上
-- [ ] 小程序 app.js 的 baseUrl 已改
+- [ ] `miniprogram/app.js` 的 `cloudEnv` 改成你的云托管环境 ID
 - [ ] 开发者工具用真实 AppID 导入
-- [ ] 勾选「不校验合法域名」
 - [ ] 重新编译，测试抖音链接
 
 ---
@@ -205,7 +222,13 @@ App({
 本项目已有 Python 后端，所以用云托管。
 
 ### Q: 需要域名备案吗？
-开发调试不需要。正式上线需要绑定已备案的自定义域名。
+**不需要！** 项目已改用 `wx.cloud.callContainer` 通过微信内网调用后端，不需要公网域名、不需要备案。
+
+### Q: 真机报错「连接断开 / 服务器忙 / cmdId 1006, errCode -1」怎么办？
+这通常是因为 `wx.cloud.init()` 的环境 ID 没配对，或服务名不匹配。
+1. 检查 `miniprogram/app.js` 里 `cloudEnv` 是否和云托管控制台的环境 ID 一致
+2. 检查 `containerService` 是否和云托管控制台的服务名一致
+3. 确认后端代码已部署最新版本（接口已改为 JSON body）
 
 ### Q: Playwright 在云托管上跑不了怎么办？
 如果资源不够，可以把资源规格调到 2核 4G。或者去掉 Playwright，改用其他方式获取 Cookie。
