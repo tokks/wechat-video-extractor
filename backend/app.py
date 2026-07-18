@@ -656,15 +656,31 @@ def _download_video(url: str, output_path: str) -> str | None:
             try:
                 print("[download] Resolving Kuaishou short link...")
                 import requests as _req
+                from urllib.parse import urlparse, parse_qs
                 _r = _req.head(url, allow_redirects=True, timeout=10, headers={
                     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
                                   "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
                                   "Mobile/15E148 Safari/604.1"})
-                if _r.url and "kuaishou.com" in _r.url:
-                    print(f"[download] Resolved: {url} -> {_r.url}")
-                    url = _r.url
+                resolved = _r.url or ""
+                if resolved:
+                    # 从重定向URL提取 photoId（可能在query参数或path里）
+                    parsed = urlparse(resolved)
+                    qs = parse_qs(parsed.query)
+                    photo_id = qs.get("photoId", [None])[0]
+                    if not photo_id:
+                        _pm = re.search(r'/(?:photo|short-video|long-video)/([a-zA-Z0-9_-]+)', parsed.path)
+                        if _pm:
+                            photo_id = _pm.group(1)
+                    if photo_id:
+                        url = f"https://www.kuaishou.com/short-video/{photo_id}"
+                        print(f"[download] Resolved: {url}")
+                    elif "kuaishou.com" in resolved:
+                        url = resolved
+                        print(f"[download] Resolved: {url}")
+                    else:
+                        print(f"[download] Could not extract photoId from: {resolved}")
                 else:
-                    print(f"[download] Resolve returned unexpected URL: {_r.url}")
+                    print("[download] Resolve returned empty URL")
             except Exception as e:
                 print(f"[download] Resolve short link err: {e}")
         print("[download] Trying Kuaishou direct download (mobile UA)...")
