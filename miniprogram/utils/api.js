@@ -312,68 +312,70 @@ function pollTask(taskId, onUpdate, interval) {
  */
 function downloadAudio(taskId, onProgress) {
   return new Promise(function (resolve, reject) {
-    // 先尝试 responseType: 'arraybuffer' 直接获取二进制
-    wx.cloud.callContainer({
-      config: { env: CLOUD_ENV },
-      path: '/api/audio/' + taskId,
+    // callContainer 响应体限制 1MB（-606002），音频文件可能超限
+    // 改用分块下载：先获取大小，再逐块下载 base64，最后合并
+    var B64_CHUNK = 800000; // 800KB base64/块（JSON 响应 ~800KB，安全在 1MB 内）
+
+    var base64Parts = [];
+    var totalSize = 0;
+    var offset = 0;
+
+    // Step 1: 获取音频信息
+    callContainer({
+      path: '/api/audio-base64/' + taskId,
       method: 'GET',
-      header: { 'X-WX-SERVICE': SERVICE },
-      responseType: 'arraybuffer',
-      success: function (res) {
-        if (res.statusCode !== 200) {
-          // 如果直接获取二进制失败，回退到 base64 方式
-          console.log('[audio] arraybuffer 模式失败, 尝试 base64...');
-          _downloadAudioBase64(taskId, onProgress, resolve, reject);
-          return;
-        }
-
-        var data = res.data;
-        // 如果返回的是 ArrayBuffer，直接保存
-        if (data instanceof ArrayBuffer) {
-          _saveAudioFile(taskId, data, resolve, reject);
-        } else if (typeof data === 'object' && data.audio) {
-          // base64 模式回退的响应
-          var ab = _base64ToArrayBuffer(data.audio);
-          _saveAudioFile(taskId, ab, resolve, reject);
-        } else {
-          // 未知格式，尝试 base64 回退
-          _downloadAudioBase64(taskId, onProgress, resolve, reject);
-        }
-      },
-      fail: function (err) {
-        console.error('[audio] callContainer fail:', err);
-        // 回退到 base64 方式
-        _downloadAudioBase64(taskId, onProgress, resolve, reject);
-      },
+      errorMsg: '获取音频信息失败',
+    }).then(function (res) {
+      totalSize = res.data.size;
+      var filename = res.data.filename;
+      console.log('[audio] 音频 base64 总大小:', totalSize, 'filename:', filename);
+      downloadChunk();
+    }).catch(function (err) {
+      console.error('[audio] 获取信息失败:', err);
+      reject(err);
     });
-  });
-}
 
-function _downloadAudioBase64(taskId, onProgress, resolve, reject) {
-  wx.cloud.callContainer({
-    config: { env: CLOUD_ENV },
-    path: '/api/audio-base64/' + taskId,
-    method: 'GET',
-    header: { 'X-WX-SERVICE': SERVICE },
-    dataType: 'json',
-    success: function (res) {
-      if (res.statusCode !== 200 || !res.data || !res.data.audio) {
-        reject(new Error('音频下载失败: HTTP ' + res.statusCode));
+    // Step 2: 逐块下载
+    function downloadChunk() {
+      if (offset >= totalSize) {
+        // 全部下载完成，合并 base64 → ArrayBuffer → 保存
+        console.log('[audio] 所有分块下载完成, 合并中...');
+        var fullBase64 = base64Parts.join('');
+        try {
+          var ab = wx.base64ToArrayBuffer(fullBase64);
+          _saveAudioFile(taskId, ab, resolve, reject);
+        } catch (e) {
+          reject(new Error('音频解码失败: ' + e.message));
+        }
         return;
       }
-      var ab = _base64ToArrayBuffer(res.data.audio);
-      _saveAudioFile(taskId, ab, resolve, reject);
-    },
-    fail: function (err) {
-      reject(new Error('下载失败: ' + (err.errMsg || '')));
-    },
+
+      var length = Math.min(B64_CHUNK, totalSize - offset);
+      callContainer({
+        path: '/api/audio-base64/' + taskId + '?offset=' + offset + '&length=' + length,
+        method: 'GET',
+        errorMsg: '下载音频分块失败',
+      }).then(function (res) {
+        if (!res.data || !res.data.audio) {
+          reject(new Error('音频分块为空: offset=' + offset));
+          return;
+        }
+        base64Parts.push(res.data.audio);
+        offset += length;
+        var pct = Math.floor(offset / totalSize * 100);
+        console.log('[audio] 分块下载:', pct + '%', '(' + offset + '/' + totalSize + ')');
+        if (onProgress) onProgress(pct);
+        downloadChunk();
+      }).catch(function (err) {
+        console.error('[audio] 分块下载失败:', err);
+        reject(err);
+      });
+    }
   });
 }
 
-function _base64ToArrayBuffer(base64) {
-  // 微信小程序 base64 → ArrayBuffer
-  return wx.base64ToArrayBuffer(base64);
-}
+
+
 
 function _saveAudioFile(taskId, arrayBuffer, resolve, reject) {
   var fs = wx.getFileSystemManager();

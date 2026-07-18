@@ -1005,11 +1005,12 @@ async def download_audio(task_id: str):
 
 
 @app.get("/api/audio-base64/{task_id}")
-async def download_audio_base64(task_id: str):
-    """下载音频文件（base64 编码）
+async def download_audio_base64(task_id: str, offset: int = 0, length: int = 0):
+    """下载音频文件（base64 编码，支持分块）
 
-    供 wx.cloud.callContainer 使用：callContainer 不一定支持
-    responseType: 'arraybuffer'，用 base64 文本传输更可靠。
+    callContainer 响应体限制 1MB（-606002）。
+    - 不传 offset/length: 返回音频信息（size, filename）
+    - 传 offset/length: 返回 base64 的一个分块
     """
     if task_id not in TASKS:
         raise HTTPException(404, "任务不存在")
@@ -1022,14 +1023,35 @@ async def download_audio_base64(task_id: str):
     if not Path(audio_path).exists():
         raise HTTPException(404, "音频文件不存在")
 
-    audio_bytes = Path(audio_path).read_bytes()
-    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
     filename = f"audio_{task_id}.mp3"
 
+    # 缓存 base64 到 task，避免每次请求都重新编码
+    if "audio_b64" not in task:
+        audio_bytes = Path(audio_path).read_bytes()
+        task["audio_b64"] = base64.b64encode(audio_bytes).decode("utf-8")
+        task["audio_b64_len"] = len(task["audio_b64"])
+
+    total_b64_len = task["audio_b64_len"]
+
+    if length == 0:
+        # 返回音频信息（小响应）
+        return {
+            "filename": filename,
+            "size": total_b64_len,
+            "audio_size": task.get("audio_size", 0),
+            "format": task.get("audio_format", "mp3"),
+        }
+
+    # 返回 base64 的一个分块
+    end = min(offset + length, total_b64_len)
+    chunk = task["audio_b64"][offset:end]
+
     return {
-        "audio": audio_b64,
-        "filename": filename,
-        "size": len(audio_bytes),
+        "audio": chunk,
+        "offset": offset,
+        "length": end - offset,
+        "total_size": total_b64_len,
+        "done": end >= total_b64_len,
     }
 
 
