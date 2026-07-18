@@ -86,7 +86,9 @@ function initUpload(filename, totalChunks) {
 
 function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
   return new Promise((resolve, reject) => {
+    const fs = wx.getFileSystemManager();
     let uploaded = 0;
+    const tempDir = wx.env.USER_DATA_PATH;
 
     function uploadNext(index) {
       if (index >= totalChunks) {
@@ -94,40 +96,63 @@ function uploadChunks(filePath, taskId, totalChunks, fileSize, onProgress) {
         return;
       }
 
-      const start = index * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, fileSize);
+      // 用 position+length 读取真正的分片数据（不是整个文件）
+      const position = index * CHUNK_SIZE;
+      const length = Math.min(CHUNK_SIZE, fileSize - position);
+      const tempPath = tempDir + '/chunk_' + index + '.tmp';
 
-      wx.uploadFile({
-        url: BASE + '/api/upload/chunk',
+      fs.readFile({
         filePath: filePath,
-        name: 'chunk',
-        formData: {
-          task_id: taskId,
-          chunk_index: index,
-        },
-        success: (res) => {
-          uploaded++;
-          const pct = Math.floor((uploaded / totalChunks) * 80);
-          if (onProgress) onProgress(pct);
-          uploadNext(index + 1);
-        },
-        fail: (err) => {
-          console.error('[upload] 分片失败:', index, err);
-          // 重试一次
-          wx.uploadFile({
-            url: BASE + '/api/upload/chunk',
-            filePath: filePath,
-            name: 'chunk',
-            formData: { task_id: taskId, chunk_index: index },
+        position: position,
+        length: length,
+        success: (readRes) => {
+          // 写成临时文件供 wx.uploadFile 使用
+          fs.writeFile({
+            filePath: tempPath,
+            data: readRes.data,
             success: () => {
-              uploaded++;
-              const pct = Math.floor((uploaded / totalChunks) * 80);
-              if (onProgress) onProgress(pct);
-              uploadNext(index + 1);
+              function doUpload(retryCount) {
+                wx.uploadFile({
+                  url: BASE + '/api/upload/chunk',
+                  filePath: tempPath,
+                  name: 'chunk',
+                  formData: { task_id: taskId, chunk_index: index },
+                  success: (res) => {
+                    // 必须检查状态码，4xx/5xx 不是成功
+                    if (res.statusCode !== 200) {
+                      if (retryCount < 1) {
+                        console.error('[upload] 分片 ' + index + ' 返回 HTTP ' + res.statusCode + ', 重试...');
+                        doUpload(retryCount + 1);
+                      } else {
+                        fs.unlink({ filePath: tempPath, fail: function() {} });
+                        reject(new Error('分片 ' + index + ' 上传失败: HTTP ' + res.statusCode));
+                      }
+                      return;
+                    }
+                    // 清理临时文件
+                    fs.unlink({ filePath: tempPath, fail: function() {} });
+                    uploaded++;
+                    const pct = Math.floor((uploaded / totalChunks) * 80);
+                    if (onProgress) onProgress(pct);
+                    uploadNext(index + 1);
+                  },
+                  fail: (err) => {
+                    if (retryCount < 1) {
+                      console.error('[upload] 分片 ' + index + ' 网络失败, 重试...', err);
+                      doUpload(retryCount + 1);
+                    } else {
+                      fs.unlink({ filePath: tempPath, fail: function() {} });
+                      reject(new Error('上传失败，分片 ' + index + ': ' + (err.errMsg || '')));
+                    }
+                  },
+                });
+              }
+              doUpload(0);
             },
-            fail: (err2) => reject(new Error('上传失败，分片 ' + index)),
+            fail: (err) => reject(new Error('写入临时文件失败: ' + (err.errMsg || ''))),
           });
         },
+        fail: (err) => reject(new Error('读取分片失败: ' + (err.errMsg || ''))),
       });
     }
 
